@@ -9,12 +9,19 @@ from flask import Flask, request, abort
 
 from linebot.v3 import WebhookParser
 from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
-    TextMessage as V3TextMessage, ImageMessage as V3ImageMessage,
-    GetProfileRequest
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage as V3TextMessage,
+    ImageMessage as V3ImageMessage
 )
+from linebot.v3.messaging.models import GetProfileRequest
 from linebot.v3.webhooks import (
-    MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+    MessageEvent,
+    TextMessageContent,
+    ImageMessageContent,
+    AudioMessageContent
 )
 from linebot.v3.exceptions import InvalidSignatureError
 
@@ -192,18 +199,24 @@ def callback():
                     else:
                         pool = text.split("抽")[-1].strip().split("、")
                         out = draw_custom(pool)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[V3TextMessage(text=out)]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=out)]
+                    ))
                     continue
                 if is_map_request(text):
                     out = generate_map_image(text)
-                    if isinstance(out, V3TextMessage):
-                        api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out]))
-                    else:
-                        api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[out]
+                    ))
                     continue
                 if is_weather_request(text):
                     out = get_weather_by_location(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[V3TextMessage(text=out)]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=out)]
+                    ))
                     continue
 
                 # GPT 回應
@@ -229,7 +242,6 @@ def callback():
 
             # 處理圖片訊息
             if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
-                # 風格生成
                 if style := memory.get("user_pending_stylegen"):
                     memory["user_pending_stylegen"] = None
                     src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
@@ -249,7 +261,6 @@ def callback():
                         ))
                     continue
 
-                # 一般圖像分析
                 analysis = analyze_image_with_gpt(
                     message_id=event.message.id,
                     api=api,
@@ -267,7 +278,6 @@ def callback():
             if isinstance(event, MessageEvent) and isinstance(event.message, AudioMessageContent):
                 transcript = transcribe_audio_from_line(event.message.id, api)
                 if transcript:
-                    # 直接將語音文字當作使用者訊息，呼叫 GPT 回應
                     reply = generate_gpt_reply(
                         user_id=user_id,
                         user_msg=transcript,
