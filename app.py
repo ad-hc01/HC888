@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
-# 本檔案為主控程式，整合 GPT 導師 + 多模組 + 固定 AI 名稱 + 群組需 @ 才啟動回應 + 私聊自動對話 + 每人記憶上限 50 句（含 debug）
+# 本檔案為主控程式，整合 GPT 導師 + 多模組 + 全自動回應（無需 @）+ 每人記憶上限 50 句
 
 import os
 import unicodedata
 from flask import Flask, request, abort
 from collections import defaultdict, deque
 
-from linebot.v3.messaging import (
-    MessagingApi, TextMessage as V3TextMessage,
-    ReplyMessageRequest
-)
+from linebot.v3.messaging import MessagingApi, TextMessage as V3TextMessage, ReplyMessageRequest
 from linebot.v3.webhook import WebhookHandler as V3WebhookHandler
 from linebot.v3.messaging.configuration import Configuration
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage
-from linebot.v3.webhook.models import SourceGroup, SourceUser  # ✅ 補 SourceUser
+from linebot.v3.webhook import MessageEvent, TextMessage, ImageMessage, SourceGroup, SourceUser
 
 from utils import (
     extract_user_name, extract_user_style, extract_user_fact, is_clear_facts,
@@ -49,8 +45,7 @@ user_data = defaultdict(lambda: {
     "history": deque(maxlen=MAX_HISTORY),
     "facts": [],
     "translate_pending": None,
-    "user_pending_stylegen": None,
-    "enabled": False
+    "user_pending_stylegen": None
 })
 
 @app.route("/callback", methods=['POST'])
@@ -75,34 +70,7 @@ def handle_text(event):
 
         source = event.source
         user_id = getattr(source, "user_id", None) or getattr(source, "group_id", None) or getattr(source, "room_id", None) or "unknown"
-
-        memory = user_data.setdefault(user_id, {
-            "name": None,
-            "display_name": None,
-            "style": "正式風",
-            "history": deque(maxlen=MAX_HISTORY),
-            "facts": [],
-            "translate_pending": None,
-            "user_pending_stylegen": None,
-            "enabled": False
-        })
-
-        is_group = isinstance(source, SourceGroup)
-        is_user = isinstance(source, SourceUser)
-        mentioned = f"@{BOT_NAME}" in text
-
-        if is_group:
-            if mentioned:
-                memory["enabled"] = True
-                memory["history"].clear()
-                print("[debug] 群組啟用")
-            elif not memory["enabled"]:
-                print("[debug] 群組未啟用，略過")
-                return
-            elif len(memory["history"]) >= MAX_HISTORY:
-                memory["enabled"] = False
-                print("[debug] 群組歷史超過限制，自動關閉")
-                return
+        memory = user_data[user_id]
 
         print(f"[debug] 使用者 ID: {user_id}")
 
@@ -278,18 +246,7 @@ def handle_image(event):
     try:
         source = event.source
         user_id = getattr(source, "user_id", None) or getattr(source, "group_id", None) or "unknown"
-
-        memory = user_data.setdefault(user_id, {
-            "name": None,
-            "display_name": None,
-            "style": "正式風",
-            "history": deque(maxlen=MAX_HISTORY),
-            "facts": [],
-            "translate_pending": None,
-            "user_pending_stylegen": None,
-            "enabled": False
-        })
-
+        memory = user_data[user_id]
         message_id = event.message.id
         image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
 
@@ -311,8 +268,8 @@ def handle_image(event):
         reply = analyze_image_with_gpt(message_id, line_bot_api, memory["name"], BOT_NAME, memory["style"])
         line_bot_api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
-            messages=[V3TextMessage(text=reply)]
-        ))
+            messages=[V3TextMessage(text=reply)])
+        )
     except Exception as e:
         print(f"[❌ handle_image error] {e}")
         line_bot_api.reply_message(ReplyMessageRequest(
