@@ -1,7 +1,10 @@
-flask==2.3.3
-line-bot-sdk==3.17.1
-openai==1.90.0
-httpx==0.27.0
-python-dotenv==1.0.1
-requests==2.32.3
-beautifulsoup4==4.12.3
+Flask==3.1.1                  # 與 Python 3.11 相容的最新 Flask 版本
+line-bot-sdk==3.17.1          # LINE Messaging API V3
+openai==1.90.0                # 最新 OpenAI 核心功能
+openai-agents==0.0.19         # 如需使用 Agents SDK
+httpx[socks]==0.28.1          # 取代 requests，用於 PTX/天氣查詢
+python-dotenv==1.0.1          # .env 支援
+beautifulsoup4==4.12.3        # 解析 HTML 用
+yt-dlp==2024.4.9              # YouTube 下載連結功能
+gunicorn>=21.2.0              # 生產環境用 WSGI server
+requests>=2.32.3              # 如有模組仍需 requests（已無上限）

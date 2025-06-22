@@ -2,52 +2,52 @@
 # 本檔案負責查詢即時天氣資訊，來自 OpenWeatherMap API，若無金鑰則顯示預設訊息
 
 import os
-import requests
+from typing import Optional
+
+import httpx
+
+DEFAULT_MESSAGE = "🌦️ 天氣查詢功能還在努力中～稍後就能使用囉！"
+ERROR_MESSAGE = "⚠️ 天氣查詢失敗，請稍後再試或確認地點是否正確"
 
 def get_weather_by_location(text: str) -> str:
+    """
+    查詢即時天氣資訊，使用 OpenWeatherMap API。
+    :param text: 使用者輸入，如「台北天氣」
+    :return: 格式化後的天氣資訊或錯誤提示
+    """
     api_key = os.getenv("OPENWEATHER_API_KEY")
     if not api_key:
-        return "🌦️ 天氣查詢功能還在努力中～稍後就能使用囉！"
+        return DEFAULT_MESSAGE
 
-    location = (
-        text.replace("天氣", "")
-            .replace("的", "")
-            .replace("如何", "")
-            .replace("怎麼樣", "")
-            .strip()
-    )
-
+    # 擷取地點文字
+    location = text.replace("天氣", "").replace("的", "").strip()
     if not location:
-        return "請提供要查詢天氣的地點名稱喔～"
+        return "❌ 請提供查詢地點，例如「台北天氣」。"
 
     try:
-        url = f"http://api.openweathermap.org/data/2.5/weather"
-        params = {
-            "q": location,
-            "appid": api_key,
-            "lang": "zh_tw",
-            "units": "metric"
-        }
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
+        url = (
+            "http://api.openweathermap.org/data/2.5/weather"
+            f"?q={location}&appid={api_key}"
+            "&lang=zh_tw&units=metric"
+        )
+        resp = httpx.get(url, timeout=5.0)
+        data = resp.json()
 
-        if data.get("cod") != 200:
-            return f"❌ 找不到「{location}」的天氣資訊"
+        if resp.status_code != 200 or "weather" not in data:
+            return f"❌ 找不到 {location} 的天氣資訊"
 
-        name = data.get("name", location)
-        weather = data.get("weather", [{}])[0]
-        main = data.get("main", {})
+        name = data.get("name")
+        desc = data["weather"][0].get("description")
+        temp = data.get("main", {}).get("temp")
+        humidity = data.get("main", {}).get("humidity")
 
-        desc = weather.get("description", "無資料")
-        temp = main.get("temp", "?")
-        humidity = main.get("humidity", "?")
+        return (
+            f"📍 {name} 現在天氣：{desc}，"
+            f"氣溫 {temp}°C，濕度 {humidity}%"
+        )
+    except httpx.RequestError as e:
+        print(f"[get_weather_by_location] Request error: {e}")
+    except Exception as e:
+        print(f"[get_weather_by_location] Unexpected error: {e}")
 
-        return f"📍 {name} 現在天氣：{desc}，氣溫 {temp}°C，濕度 {humidity}%"
-
-    except requests.exceptions.Timeout:
-        return "⚠️ 天氣伺服器回應超時，請稍後再試。"
-    except requests.exceptions.RequestException as e:
-        return f"⚠️ 天氣查詢錯誤：{e}"
-    except Exception:
-        return "⚠️ 天氣查詢失敗，請稍後再試或確認地點是否正確"
+    return ERROR_MESSAGE

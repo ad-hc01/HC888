@@ -21,15 +21,15 @@ TAROT_LIST = [
     "🌟 星星（正位）：希望、靈感與療癒。",
 ]
 
-def draw_fortune():
+def draw_fortune() -> str:
     """抽取今日運勢"""
     return f"🔮 今日運勢：{random.choice(FORTUNE_LIST)}"
 
-def draw_tarot():
+def draw_tarot() -> str:
     """抽取塔羅牌"""
     return f"🃏 你的塔羅牌是：{random.choice(TAROT_LIST)}"
 
-def draw_custom(pool):
+def draw_custom(pool: list[str]) -> str:
     """從自訂卡池中抽取"""
     if not pool:
         return "❌ 卡池為空，請先設定自訂卡池內容。"
