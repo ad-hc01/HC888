@@ -16,7 +16,6 @@ from linebot.v3.messaging import (
     TextMessage as V3TextMessage,
     ImageMessage as V3ImageMessage
 )
-from linebot.v3.messaging.models import GetProfileRequest
 from linebot.v3.webhooks import (
     MessageEvent,
     TextMessageContent,
@@ -84,7 +83,7 @@ def callback():
 
             # 更新用戶顯示名稱
             try:
-                profile = api.get_profile(GetProfileRequest(user_id=user_id))
+                profile = api.get_profile(user_id)
                 memory["display_name"] = profile.display_name
             except Exception:
                 pass
@@ -181,15 +180,24 @@ def callback():
                     continue
                 if is_image_request(text):
                     msg = generate_image_message(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
                     continue
                 if is_video_request(text):
                     msg = search_youtube_card(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
                     continue
                 if is_transport_request(text):
                     msg = get_thsr_schedule()
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
                     continue
                 if is_draw_request(text):
                     if "運勢" in text:
