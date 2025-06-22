@@ -154,15 +154,12 @@ def callback():
                     handle_youtube_download(event, api, media_type="audio")
                     continue
 
-                # 觸發 AI 回應
-                ai_name = memory["ai_name"] or "HC"
-                if normalize_text(ai_name) not in normalize_text(text):
-                    continue
+                # **即時對話：不需喊名字，直接回應**
                 if not memory["has_welcomed"]:
                     memory["has_welcomed"] = True
                     welcome = (
-                        f"嗨～我是你專屬助理 {ai_name} 😊\n"
-                        "我會記住你說過的 20 句話，隨時叫我「" + ai_name + "」就可以開始對話！"
+                        f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n"
+                        "隨時跟我說話就可以了，不用再喊我的名字！"
                     )
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
@@ -180,24 +177,15 @@ def callback():
                     continue
                 if is_image_request(text):
                     msg = generate_image_message(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
                     continue
                 if is_video_request(text):
                     msg = search_youtube_card(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
                     continue
                 if is_transport_request(text):
                     msg = get_thsr_schedule()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
                     continue
                 if is_draw_request(text):
                     if "運勢" in text:
@@ -214,10 +202,7 @@ def callback():
                     continue
                 if is_map_request(text):
                     out = generate_map_image(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[out]
-                    ))
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out]))
                     continue
                 if is_weather_request(text):
                     out = get_weather_by_location(text)
