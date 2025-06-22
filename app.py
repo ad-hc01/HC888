@@ -13,7 +13,8 @@ from linebot.v3.messaging import (
 from linebot.v3.webhook import WebhookHandler as V3WebhookHandler
 from linebot.v3.messaging.configuration import Configuration
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, SourceGroup
+from linebot.models import MessageEvent, TextMessage, ImageMessage
+from linebot.v3.webhook.models import SourceGroup, SourceUser  # ✅ 補 SourceUser
 
 from utils import (
     extract_user_name, extract_user_style, extract_user_fact, is_clear_facts,
@@ -69,25 +70,41 @@ def home():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     try:
-        print("[debug] 收到文字訊息")
-        print("[debug] 內容：", event.message.text)
-
-        user_id = event.source.user_id
         text = event.message.text.strip()
-        memory = user_data[user_id]
+        print(f"[debug] 收到訊息：{text}")
 
-        is_group = isinstance(event.source, SourceGroup)
+        source = event.source
+        user_id = getattr(source, "user_id", None) or getattr(source, "group_id", None) or getattr(source, "room_id", None) or "unknown"
+
+        memory = user_data.setdefault(user_id, {
+            "name": None,
+            "display_name": None,
+            "style": "正式風",
+            "history": deque(maxlen=MAX_HISTORY),
+            "facts": [],
+            "translate_pending": None,
+            "user_pending_stylegen": None,
+            "enabled": False
+        })
+
+        is_group = isinstance(source, SourceGroup)
+        is_user = isinstance(source, SourceUser)
         mentioned = f"@{BOT_NAME}" in text
 
         if is_group:
             if mentioned:
                 memory["enabled"] = True
                 memory["history"].clear()
+                print("[debug] 群組啟用")
             elif not memory["enabled"]:
+                print("[debug] 群組未啟用，略過")
                 return
             elif len(memory["history"]) >= MAX_HISTORY:
                 memory["enabled"] = False
+                print("[debug] 群組歷史超過限制，自動關閉")
                 return
+
+        print(f"[debug] 使用者 ID: {user_id}")
 
         if is_help_request(text):
             reply = (
@@ -254,13 +271,25 @@ def handle_text(event):
         ))
 
     except Exception as e:
-        print(f"[handle_text error] {e}")
+        print(f"[❌ handle_text error] {e}")
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     try:
-        user_id = event.source.user_id
-        memory = user_data[user_id]
+        source = event.source
+        user_id = getattr(source, "user_id", None) or getattr(source, "group_id", None) or "unknown"
+
+        memory = user_data.setdefault(user_id, {
+            "name": None,
+            "display_name": None,
+            "style": "正式風",
+            "history": deque(maxlen=MAX_HISTORY),
+            "facts": [],
+            "translate_pending": None,
+            "user_pending_stylegen": None,
+            "enabled": False
+        })
+
         message_id = event.message.id
         image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
 
@@ -285,6 +314,7 @@ def handle_image(event):
             messages=[V3TextMessage(text=reply)]
         ))
     except Exception as e:
+        print(f"[❌ handle_image error] {e}")
         line_bot_api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
             messages=[V3TextMessage(text=f"⚠️ 圖片處理錯誤：{e}")]
