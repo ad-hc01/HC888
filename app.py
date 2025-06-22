@@ -10,7 +10,7 @@ from linebot.v3.webhook import WebhookHandler as V3WebhookHandler
 from linebot.v3.messaging.configuration import Configuration
 from linebot.exceptions import InvalidSignatureError
 from linebot.v3.webhook import MessageEvent
-from linebot.v3.webhook.models import TextMessage, ImageMessage, StickerMessage
+from linebot.v3.messaging.models import TextMessage, ImageMessage, StickerMessage
 
 from utils import (
     extract_user_name, extract_user_style, extract_user_fact, is_clear_facts,
