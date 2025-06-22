@@ -4,7 +4,8 @@
 import base64
 from io import BytesIO
 from openai import OpenAI
-from linebot.v3.messaging import MessagingApi, GetMessageContentRequest
+from linebot.v3.messaging import MessagingApi
+from linebot.v3.messaging.models import GetMessageContentRequest  # 修正位址
 
 # 初始化 OpenAI 客戶端（自動讀取環境變數 OPENAI_API_KEY）
 client = OpenAI()
