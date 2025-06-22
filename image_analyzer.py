@@ -1,38 +1,39 @@
 # -*- coding: utf-8 -*-
 # 本檔案負責圖片分析功能，使用 GPT-4o 的多模態能力處理 LINE 傳來的圖片內容
 
+import os
 import base64
 from io import BytesIO
+
+import requests
 from openai import OpenAI
-from linebot.v3.messaging import MessagingApi
-from linebot.v3.messaging.models import GetMessageContentRequest  # 修正位址
 
 # 初始化 OpenAI 客戶端（自動讀取環境變數 OPENAI_API_KEY）
 client = OpenAI()
 
+# LINE 圖片內容 API
+CONTENT_URL = "https://api-data.line.me/v2/bot/message/{message_id}/content"
+
 def analyze_image_with_gpt(
     message_id: str,
-    api: MessagingApi,
     user_name: str | None = None,
     ai_name: str = "AI",
     style: str = "正式風"
 ) -> str:
     """
     使用 GPT-4o 分析 LINE 傳來的圖片。
-    :param api: 已初始化的 MessagingApi 實例
-    :param message_id: LINE 圖片訊息 ID
-    :param user_name: 使用者顯示名稱（可 None）
-    :param ai_name: AI 名稱
-    :param style: 回答風格
+    直接向 LINE 伺服器拉 binary，再轉 base64 給 GPT 多模態。
     """
-    # 1. 下載圖片內容
+    # 1. 下載圖片二進位
+    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    if not token:
+        return "❌ 未設定 LINE_CHANNEL_ACCESS_TOKEN，無法取得圖片。"
+    url = CONTENT_URL.format(message_id=message_id)
+    headers = {"Authorization": f"Bearer {token}"}
     try:
-        req = GetMessageContentRequest(message_id=message_id)
-        resp = api.get_message_content(req)
-        buf = BytesIO()
-        for chunk in resp.iter_bytes():
-            buf.write(chunk)
-        img_data = buf.getvalue()
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        img_data = resp.content
     except Exception:
         return "❌ 取得圖片內容失敗，請稍後再試。"
 
@@ -40,14 +41,14 @@ def analyze_image_with_gpt(
     b64 = base64.b64encode(img_data).decode("utf-8")
     data_uri = f"data:image/png;base64,{b64}"
 
-    # 3. 組裝系統提示
+    # 3. 系統提示
     style_prefix = f""
     system_prompt = (
         f"你是一位具備圖像理解能力的 AI，名稱是「{ai_name}」。"
         "請根據使用者傳來的圖片進行分析，說明主要物體或場景，並提供觀察建議。"
     )
 
-    # 4. 建立多模態訊息
+    # 4. 組裝多模態訊息
     messages = [
         {"role": "system", "content": system_prompt},
         {
