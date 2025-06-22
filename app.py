@@ -12,6 +12,7 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.v3.webhook import MessageEvent
 from linebot.v3.messaging.models import TextMessage, ImageMessage, StickerMessage
 
+
 from utils import (
     extract_user_name, extract_user_style, extract_user_fact, is_clear_facts,
     is_image_request, is_video_request, is_transport_request, is_map_request,
@@ -31,7 +32,10 @@ from extended_modules.map_handler import generate_map_image
 from extended_modules.youtube_search import search_youtube_flex
 
 app = Flask(__name__)
-configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+configuration = Configuration(
+    api_key={"Authorization": f"Bearer {os.getenv('LINE_CHANNEL_ACCESS_TOKEN')}"}
+)
+
 line_bot_api = MessagingApi(configuration)
 handler = V3WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
