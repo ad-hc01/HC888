@@ -22,7 +22,8 @@ from info_handler import (
 from linebot.v3 import WebhookParser
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
-    TextMessage as V3TextMessage, ImageMessage as V3ImageMessage
+    TextMessage as V3TextMessage, ImageMessage as V3ImageMessage,
+    PushMessageRequest
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
@@ -158,18 +159,10 @@ def callback():
                     elif text.startswith("翻譯"):
                         memory["translate_pending"] = text.replace("翻譯", "").strip()
                         reply = "你想翻譯成哪一種語言呢？"
-
                     elif text.startswith("下載影片") or text.startswith("下載音訊") or text.startswith("下載音樂"):
                         handle_youtube_download(event, api,
                                                 media_type="audio" if "音" in text else "video")
                         continue
-
-                    # ✅ 臨時查詢自己 user_id（建議用完即移除）
-                    elif text.strip() == "@我是哪位":
-                        uid = getattr(event.source, "user_id", None)
-                        reply = f"🪪 你的 user_id 是：\n{uid}" if uid else "⚠️ 無法取得使用者 ID。"
-
-                    # ✅ 管理員專用：顯示 user_id
                     elif text.strip() == "@顯示使用者ID":
                         uid = getattr(event.source, "user_id", None)
                         admin_uid = os.getenv("LINE_ADMIN_USER")
@@ -177,8 +170,6 @@ def callback():
                             reply = f"👤 你的使用者 ID 是：\n{uid}"
                         else:
                             reply = "🚫 無權查看使用者 ID。"
-
-
                     elif text.strip() == "@顯示群組ID":
                         gid = getattr(event.source, "group_id", None)
                         admin_uid = os.getenv("LINE_ADMIN_USER")
@@ -186,7 +177,6 @@ def callback():
                             reply = f"👥 此群組 ID 是：\n{gid}"
                         else:
                             reply = "🚫 無權查看群組 ID。"
-
                     elif text.strip() == "@顯示來源ID":
                         src = getattr(event.source, "group_id", None) or getattr(event.source, "user_id", None)
                         admin_uid = os.getenv("LINE_ADMIN_USER")
@@ -194,17 +184,13 @@ def callback():
                             reply = f"🔐 目前來源 ID 是：\n{src}"
                         else:
                             reply = "🚫 無權查看來源 ID。"
-
                     elif text.startswith("啟動監聽:"):
                         raw = text.replace("啟動監聽:", "").strip()
                         reply = start_monitor(raw, getattr(event.source, "group_id", None) or event.source.user_id, api)
-
                     elif text == "停止監聽":
                         reply = stop_monitor()
-
                     elif text == "監聽狀態":
                         reply = get_monitor_status()
-
                     elif is_stylegen_request(text):
                         memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
                         reply = "請傳一張圖片給我套用風格～"
