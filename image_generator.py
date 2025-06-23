@@ -53,3 +53,27 @@ def generate_image_message(text: str):
         print(f"[generate_image_message] Unexpected error: {e}")
 
     return V3TextMessage(text="⚠️ 目前無法生成圖片，請稍後再試。")
+
+def generate_image_from_prompt(prompt: str) -> str:
+    """
+    新增函式：只回傳圖片 URL，方便 app.py 或其他模組調用
+    """
+    if is_sensitive(prompt):
+        raise ValueError("敏感詞觸發，無法生成圖片")
+
+    try:
+        enhanced_prompt = enhance_prompt_with_style(prompt, "")
+        resp = client.images.generate(
+            model="dall-e-3",
+            prompt=enhanced_prompt,
+            size="1024x1024",
+            response_format="url"
+        )
+        return resp.data[0].url
+
+    except OpenAIError as e:
+        print(f"[generate_image_from_prompt] OpenAI API error: {e}")
+        raise
+    except Exception as e:
+        print(f"[generate_image_from_prompt] Unexpected error: {e}")
+        raise
