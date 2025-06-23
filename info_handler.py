@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # info_handler.py
-# 本模組處理通用人物資訊查詢：身分介紹、年齡查詢、生日查詢、出道查詢、時間查詢及其他屬性問題
+# 本模組處理通用人物資訊查詢：身分介紹、年齡查詢、生日查詢、出道查詢、專輯查詢、時間查詢及其他屬性問題
 
 import re
 from datetime import datetime
@@ -19,6 +19,8 @@ def is_age_query(text): return bool(re.search(r"幾歲|年齡", text))
 def is_birthday_query(text): return bool(re.search(r"生日|出生日期", text))
 
 def is_debut_query(text): return "出道" in text and not is_birthday_query(text)
+
+def is_album_query(text): return bool(re.search(r"專輯|唱片", text))
 
 def is_who_query(text): return bool(re.search(r"是誰", text))
 
@@ -45,7 +47,6 @@ def handle_age_query(text):
             raise ValueError("GPT 回傳格式錯誤")
         return f"『{name}』目前 {age} 歲。"
     except (OpenAIError, ValueError):
-        # 強化搜尋字串：包含團體與成員
         query = f"{name} 年齡"
         return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(query)}"
 
@@ -69,6 +70,16 @@ def handle_debut_query(text):
         y, mth, d = m.groups()
         return f"『{name}』於 {y} 年 {mth} 月 {d} 日 出道。"
     return f"📡 查不到明確出道日期，以下網路結果：\n{result}"
+
+# —— 專輯列表查詢 ——
+def handle_album_query(text):
+    name = extract_person_name(text)
+    result = search_all_sources(f"{name} 發行 專輯 列表")
+    # 嘗試從結果中抓出專輯名稱（取最多10項）
+    albums = re.findall(r"·\s*([^\n·]+)", result)
+    if albums:
+        return f"『{name}』曾發行的專輯有：{ '、'.join(albums[:10]) }。"
+    return f"📡 查不到完整列表，以下是網路結果：\n{result}"
 
 # —— 是誰查詢 ——
 def handle_who_query(text):
@@ -127,13 +138,11 @@ def get_birthdate(name):
 
 # —— 抽取人名與屬性 ——
 def extract_person_name(text):
-    # 處理「團體的成員」情境
-    m = re.search(r"(.+?)團體.*的(.+?)(?:幾歲|年齡|出生|出道)?", text)
+    m = re.search(r"(.+?)團體.*的(.+?)(?:幾歲|年齡|出生|出道|專輯)?", text)
     if m:
         grp, member = m.groups()
-        return f"{grp} 的 {member}"  
-    # 一般模式
-    m2 = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|幾歲|年齡|出道)?", text)
+        return f"{grp} 的 {member}"
+    m2 = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|幾歲|年齡|出道|專輯)?", text)
     return m2.group(1).strip() if m2 else text.strip()
 
 def extract_general_attribute(text):
