@@ -5,6 +5,7 @@
 import os
 import unicodedata
 from collections import defaultdict, deque
+from datetime import date
 from flask import Flask, request, abort
 
 from linebot.v3 import WebhookParser
@@ -24,6 +25,15 @@ from linebot.v3.webhooks import (
 )
 from linebot.v3.exceptions import InvalidSignatureError
 
+# —— 新增：年齡與人物資訊處理模組 ——
+from age_handler import is_age_query, handle_age_query
+from info_handler import (
+    is_who_query, handle_who_query,
+    is_birthday_query, handle_birthday_query,
+    is_general_info_query, handle_general_info_query
+)
+
+# —— 既有模組匯入 ——
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
@@ -63,8 +73,7 @@ user_data = defaultdict(lambda: {
     "user_pending_stylegen": None,
     "has_welcomed": False
 })
-
-activated_users = set()  # ⬅️ 用來記錄哪些 user_id 已經喚醒過了
+activated_users = set()
 
 def normalize_text(text: str) -> str:
     return unicodedata.normalize('NFKC', text).lower()
@@ -83,17 +92,17 @@ def callback():
         for event in events:
             user_id = event.source.user_id
             memory = user_data[user_id]
-
             try:
                 profile = api.get_profile(user_id)
                 memory["display_name"] = profile.display_name
-            except Exception:
+            except:
                 pass
 
+            # —— 只處理文字訊息 ——  
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 text = event.message.text.strip()
 
-                # 💤 安靜模式控制（只在首次提及 AI 名稱時觸發互動）
+                # 💤 安靜模式：先喚醒
                 if user_id not in activated_users:
                     if memory["ai_name"].lower() in normalize_text(text):
                         activated_users.add(user_id)
@@ -106,11 +115,9 @@ def callback():
                             reply_token=event.reply_token,
                             messages=[V3TextMessage(text=welcome)]
                         ))
-                        continue
-                    else:
-                        continue  # 尚未被喚醒者不處理，安靜模式
-                # 🟢 已被喚醒者，開始處理後續對話
+                    continue  # 未喚醒前不處理其他
 
+                # —— 基本設定／記憶管理 ——  
                 if is_clear_facts(text):
                     memory["facts"].clear()
                     api.reply_message(ReplyMessageRequest(
@@ -147,6 +154,7 @@ def callback():
                     ))
                     continue
 
+                # —— 翻譯流程 ——  
                 if memory["translate_pending"]:
                     original = memory.pop("translate_pending")
                     translated = translate_text(original, text)
@@ -163,12 +171,11 @@ def callback():
                     ))
                     continue
 
+                # —— 媒體／功能模組 ——  
                 if text.startswith("下載影片"):
-                    handle_youtube_download(event, api, media_type="video")
-                    continue
+                    handle_youtube_download(event, api, media_type="video"); continue
                 if text.startswith("下載音訊") or text.startswith("下載音樂"):
-                    handle_youtube_download(event, api, media_type="audio")
-                    continue
+                    handle_youtube_download(event, api, media_type="audio"); continue
 
                 if is_stylegen_request(text):
                     memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
@@ -177,47 +184,79 @@ def callback():
                         messages=[V3TextMessage(text="請傳一張圖片給我套用風格～")]
                     ))
                     continue
+
                 if is_image_request(text):
                     msg = generate_image_message(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
-                    continue
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+
                 if is_video_request(text):
                     msg = search_youtube_card(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
-                    continue
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+
                 if is_transport_request(text):
                     msg = get_thsr_schedule()
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
-                    continue
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+
                 if is_draw_request(text):
-                    if "塔羅" in text.lower():
-                        out = draw_tarot()
-                    else:
-                        out = draw_fortune()
+                    out = draw_tarot() if "塔羅" in text.lower() else draw_fortune()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
-                    ))
-                    continue
+                    )); continue
+
                 if is_meihua_request(text):
                     out = generate_meihua_hexagram()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
-                    ))
-                    continue
+                    )); continue
+
                 if is_map_request(text):
                     out = generate_map_image(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out]))
-                    continue
+                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out])); continue
+
                 if is_weather_request(text):
                     out = get_weather_by_location(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
+                    )); continue
+
+                # —— 新增：各類查詢攔截 ——  
+                # 1. 年齡查詢
+                if is_age_query(text):
+                    reply = handle_age_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+                # 2. 是誰查詢
+                if is_who_query(text):
+                    reply = handle_who_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+                # 3. 生日查詢
+                if is_birthday_query(text):
+                    reply = handle_birthday_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+                # 4. 通用屬性查詢
+                if is_general_info_query(text):
+                    reply = handle_general_info_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
                     ))
                     continue
 
+                # —— 其他問題 ——  
                 reply = generate_gpt_reply(
                     user_id=user_id,
                     user_msg=text,
@@ -227,7 +266,7 @@ def callback():
                     style=memory["style"],
                     facts=memory["facts"]
                 )
-                if any(kw in reply for kw in ["我不知道", "無法提供", "不確定", "請自行查"]):
+                if any(k in reply for k in ["我不知道", "無法提供", "不確定", "請自行查"]):
                     reply += "\n\n" + search_all_sources(text)
 
                 memory["history"].append({"role": "user", "content": text})
@@ -237,8 +276,8 @@ def callback():
                     reply_token=event.reply_token,
                     messages=[V3TextMessage(text=f"{user_label}～{reply}")]
                 ))
-                continue
 
+            # —— 圖片／音訊處理 ——  
             if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
                 if style := memory.get("user_pending_stylegen"):
                     memory["user_pending_stylegen"] = None
