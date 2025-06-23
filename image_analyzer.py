@@ -7,11 +7,22 @@
 import base64
 import requests
 from io import BytesIO
-import pytesseract
 from PIL import Image
 from openai import OpenAI
 from linebot.v3.messaging.models import TextMessage as V3TextMessage
 from linebot.v3.messaging import MessagingApi
+
+# 嘗試 import pytesseract，並設定執行檔路徑
+try:
+    import pytesseract
+    import os
+    TESSERACT_CMD = "/usr/bin/tesseract"
+    if os.path.exists(TESSERACT_CMD):
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    else:
+        pytesseract = None
+except ImportError:
+    pytesseract = None
 
 client = OpenAI()
 
@@ -53,14 +64,17 @@ def analyze_image_with_gpt(message_id: str, api: MessagingApi, user_name=None, a
         gpt_result = gpt_response.choices[0].message.content.strip()
         messages.append(V3TextMessage(text=f"📷 已分析圖片內容如下：\n{gpt_result}"))
 
-        # OCR 分析
-        try:
-            ocr_image = Image.open(BytesIO(image_data))
-            ocr_result = pytesseract.image_to_string(ocr_image, lang='eng+chi_tra').strip()
-            if ocr_result:
-                messages.append(V3TextMessage(text=f"📝 圖中文字內容：\n{ocr_result}"))
-        except Exception as e:
-            messages.append(V3TextMessage(text=f"⚠️ 圖像文字辨識失敗：{e}"))
+        # OCR 分析（有 pytesseract 且 tesseract 執行檔存在才執行）
+        if pytesseract:
+            try:
+                ocr_image = Image.open(BytesIO(image_data))
+                ocr_result = pytesseract.image_to_string(ocr_image, lang='eng+chi_tra').strip()
+                if ocr_result:
+                    messages.append(V3TextMessage(text=f"📝 圖中文字內容：\n{ocr_result}"))
+            except Exception as e:
+                messages.append(V3TextMessage(text=f"⚠️ 圖像文字辨識失敗：{e}"))
+        else:
+            messages.append(V3TextMessage(text="⚠️ OCR 功能目前不可用（缺少 pytesseract 或 tesseract 執行檔）。"))
 
     except Exception as e:
         messages.append(V3TextMessage(text=f"⚠️ 無法分析圖片，發生錯誤：{e}"))
