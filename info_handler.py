@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # info_handler.py
 # 本模組處理通用人物資訊查詢：身分介紹、生日查詢、時間查詢及其他屬性問題
+
 import re
-from datetime import date
+from datetime import datetime
 from openai import OpenAI, OpenAIError
 from search_web import search_all_sources
 from user_info import get_user_info  # 用於取得即時在地時間
@@ -14,7 +15,7 @@ def is_time_query(text: str) -> bool:
     return bool(re.search(r"現在\s*幾點", text))
 
 def handle_time_query() -> str:
-    info = get_user_info()  # { location, local_time, ... }
+    info = get_user_info()  # { location, local_time: datetime, ... }
     local_time = info.get("local_time")
     if local_time:
         return f"現在的在地時間是 {local_time.strftime('%H:%M')}。"
@@ -24,13 +25,46 @@ def handle_time_query() -> str:
 def is_who_query(text: str) -> bool:
     return bool(re.search(r"(?:請問\s*)?(.+?)\s*是誰", text))
 
+def handle_who_query(text: str) -> str:
+    name = extract_person_name(text)
+    return get_who_info(name)
+
 # —— 生日查詢 ——  
 def is_birthday_query(text: str) -> bool:
     return bool(re.search(r"(?:請問\s*)?(.+?)\s*(?:的)?(?:生日|出生日期)", text))
 
+def handle_birthday_query(text: str) -> str:
+    name = extract_person_name(text)
+    bd = get_birthdate(name)
+    if re.match(r"\d{4}-\d{2}-\d{2}", bd):
+        info = get_user_info()
+        local_time = info.get("local_time")
+        today = local_time.date() if local_time else datetime.now().date()
+        y, m, d = map(int, bd.split("-"))
+        age = today.year - y - ((today.month, today.day) < (m, d))
+        return f"『{name}』出生於 {bd}，截至 {today}，年齡為 {age} 歲。"
+    return bd
+
 # —— 泛用屬性查詢 ——  
 def is_general_info_query(text: str) -> bool:
     return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)\?*", text))
+
+def handle_general_info_query(text: str) -> str:
+    name = extract_person_name(text)
+    attr = extract_general_attribute(text)
+    prompt = f"請提供『{name}』的{attr}，需依據公開資訊並簡要回答。"
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        ans = resp.choices[0].message.content.strip()
+        if not ans or any(k in ans for k in ["不知道", "抱歉"]):
+            raise ValueError("GPT 未返回有效資訊")
+        return ans
+    except (OpenAIError, ValueError):
+        return search_all_sources(f"{name} {attr}")
 
 # —— 萃取人名與屬性 ——  
 def extract_person_name(text: str) -> str:
@@ -47,14 +81,14 @@ def get_who_info(name: str) -> str:
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
         info = resp.choices[0].message.content.strip()
-        if not info or any(k in info for k in ["不知道","抱歉"]):
-            raise ValueError
+        if not info or any(k in info for k in ["不知道", "抱歉"]):
+            raise ValueError("GPT 未返回有效資訊")
         return info
-    except:
+    except (OpenAIError, ValueError):
         return search_all_sources(name)
 
 def get_birthdate(name: str) -> str:
@@ -62,41 +96,12 @@ def get_birthdate(name: str) -> str:
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role":"user","content":prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0
         )
         bd = resp.choices[0].message.content.strip()
         if not re.match(r"\d{4}-\d{2}-\d{2}", bd):
-            raise ValueError
+            raise ValueError("格式不符")
         return bd
-    except:
+    except (OpenAIError, ValueError):
         return search_all_sources(f"{name} 出生日期")
-
-def handle_who_query(text: str) -> str:
-    return get_who_info(extract_person_name(text))
-
-def handle_birthday_query(text: str) -> str:
-    bd = get_birthdate(extract_person_name(text))
-    if re.match(r"\d{4}-\d{2}-\d{2}", bd):
-        y, m, d = map(int, bd.split("-"))
-        today = date(2025, 6, 23)
-        age = today.year - y - ((today.month, today.day) < (m, d))
-        return f"『{extract_person_name(text)}』出生於 {bd}，截至 {today}，年齡為 {age} 歲。"
-    return bd
-
-def handle_general_info_query(text: str) -> str:
-    name = extract_person_name(text)
-    attr = extract_general_attribute(text)
-    prompt = f"請提供『{name}』的{attr}，需依據公開資訊並簡要回答。"
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role":"user","content":prompt}],
-            temperature=0
-        )
-        ans = resp.choices[0].message.content.strip()
-        if not ans or any(k in ans for k in ["不知道","抱歉"]):
-            raise ValueError
-        return ans
-    except:
-        return search_all_sources(f"{name} {attr}")
