@@ -1,379 +1,150 @@
 # -*- coding: utf-8 -*-
-# 本檔案為主控程式，整合 GPT 導師 + 多模組 + 使用者命名記憶 
-# + 翻譯 + YouTube 下載連結 + 地圖/抽卡/天氣 + 圖片風格生成 + 梅花易數 + 喚醒式安靜模式
+# info_handler.py
+# 本模組處理通用人物資訊查詢：身分介紹、年齡查詢、生日查詢、出道查詢、專輯查詢、時間查詢及其他屬性問題
 
-import os
-import unicodedata
-from collections import defaultdict, deque
-from flask import Flask, request, abort
-
-# —— 通用查詢模組 ——  
-from info_handler import (
-    is_time_query, handle_time_query,
-    is_age_query, handle_age_query,
-    is_who_query, handle_who_query,
-    is_birthday_query, handle_birthday_query,
-    is_general_info_query, handle_general_info_query
-)
-
-# 其他既有模組匯入
-from linebot.v3 import WebhookParser
-from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
-    TextMessage as V3TextMessage, ImageMessage as V3ImageMessage
-)
-from linebot.v3.webhooks import (
-    MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
-)
-from linebot.v3.exceptions import InvalidSignatureError
-
-from utils import (
-    extract_user_name, extract_ai_name, extract_user_style,
-    extract_user_fact, is_clear_facts,
-    is_image_request, is_video_request, is_transport_request,
-    is_map_request, is_translate_request,
-    is_draw_request, is_weather_request, is_stylegen_request,
-    is_meihua_request
-)
-from gpt_handler import generate_gpt_reply
-from image_generator import generate_image_message
-from image_analyzer import analyze_image_with_gpt
-from image_generator_style import generate_stylized_image
-from youtube_handler import search_youtube_card
-from youtube_downloader import handle_youtube_download
-from transport import get_thsr_schedule
+import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from openai import OpenAI, OpenAIError
 from search_web import search_all_sources
-from translate_handler import translate_text
-from draw_handler import draw_fortune, draw_tarot
-from weather_handler import get_weather_by_location
-from extended_modules.map_handler import generate_map_image
-from extended_modules.tts_handler import generate_tts_audio
-from extended_modules.stt_handler import transcribe_audio_from_line
-from meihua_handler import generate_meihua_hexagram
 
-app = Flask(__name__)
-parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
-cfg = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+client = OpenAI()
+TZ = ZoneInfo("Asia/Taipei")
 
-# 使用者記憶結構
-user_data = defaultdict(lambda: {
-    "name": None,
-    "display_name": None,
-    "ai_name": "HC",
-    "style": "正式風",
-    "history": deque(maxlen=50),
-    "facts": [],
-    "translate_pending": None,
-    "user_pending_stylegen": None,
-    "has_welcomed": False
-})
-activated_users = set()
+# —— 查詢類型判斷 ——
+def is_time_query(text): return "現在幾點" in text
 
-def normalize_text(text: str) -> str:
-    return unicodedata.normalize('NFKC', text).lower()
+def is_age_query(text): return bool(re.search(r"幾歲|年齡", text))
 
-@app.route("/callback", methods=["POST"])
-def callback():
-    signature = request.headers.get("X-Line-Signature", "")
-    body = request.get_data(as_text=True)
+def is_birthday_query(text): return bool(re.search(r"生日|出生日期", text))
+
+def is_debut_query(text): return "出道" in text and not is_birthday_query(text)
+
+def is_album_query(text): return bool(re.search(r"專輯|唱片", text))
+
+def is_who_query(text): return bool(re.search(r"是誰", text))
+
+def is_general_info_query(text):
+    return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)", text))
+
+# —— 即時時間查詢 ——
+def handle_time_query():
+    now = datetime.now(TZ)
+    return f"🕒 現在台北時間是 {now.strftime('%H:%M')}。"
+
+# —— 年齡查詢 ——
+def handle_age_query(text):
+    name = extract_person_name(text)
+    prompt = f"請問『{name}』目前幾歲？請僅回傳年齡數字（例如：20）。"
     try:
-        events = parser.parse(body, signature)
-    except InvalidSignatureError:
-        abort(400)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        age = resp.choices[0].message.content.strip()
+        if not re.match(r"^\d{1,3}$", age):
+            raise ValueError("GPT 回傳格式錯誤")
+        return f"『{name}』目前 {age} 歲。"
+    except (OpenAIError, ValueError):
+        query = f"{name} 年齡"
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(query)}"
 
-    with ApiClient(cfg) as client:
-        api = MessagingApi(client)
-        for event in events:
-            # 僅處理 MessageEvent
-            if not isinstance(event, MessageEvent):
-                continue
+# —— 生日查詢 ——
+def handle_birthday_query(text):
+    name = extract_person_name(text)
+    bd = get_birthdate(name)
+    if re.match(r"\d{4}-\d{2}-\d{2}", bd):
+        today = datetime.now(TZ).date()
+        y, m, d = map(int, bd.split("-"))
+        age = today.year - y - ((today.month, today.day) < (m, d))
+        return f"『{name}』出生於 {y} 年 {m} 月 {d} 日，截至今天 {today}，她 {age} 歲。"
+    return f"📡 查不到『{name}』的出生日期，以下是網路結果：\n{bd}"
 
-            # 處理文字訊息
-            if isinstance(event.message, TextMessageContent):
-                user_id = event.source.user_id
-                memory = user_data[user_id]
-                # 更新 display_name
-                try:
-                    profile = api.get_profile(user_id)
-                    memory["display_name"] = profile.display_name
-                except:
-                    pass
+# —— 出道日期查詢 ——
+def handle_debut_query(text):
+    name = extract_person_name(text)
+    result = search_all_sources(f"{name} 出道日期")
+    m = re.search(r"(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})", result)
+    if m:
+        y, mth, d = m.groups()
+        return f"『{name}』於 {y} 年 {mth} 月 {d} 日 出道。"
+    return f"📡 查不到明確出道日期，以下網路結果：\n{result}"
 
-                text = event.message.text.strip()
+# —— 專輯列表查詢 ——
+def handle_album_query(text):
+    name = extract_person_name(text)
+    result = search_all_sources(f"{name} 發行 專輯 列表")
+    # 嘗試從結果中抓出專輯名稱（取最多10項）
+    albums = re.findall(r"·\s*([^\n·]+)", result)
+    if albums:
+        return f"『{name}』曾發行的專輯有：{ '、'.join(albums[:10]) }。"
+    return f"📡 查不到完整列表，以下是網路結果：\n{result}"
 
-                # 💤 喚醒（安靜模式）
-                if user_id not in activated_users:
-                    if memory["ai_name"].lower() in normalize_text(text):
-                        activated_users.add(user_id)
-                        memory["has_welcomed"] = True
-                        welcome = (
-                            f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n"
-                            "之後你可以直接講話，不用再說 HC 也會理你喔！"
-                        )
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[V3TextMessage(text=welcome)]
-                        ))
-                    continue
+# —— 是誰查詢 ——
+def handle_who_query(text):
+    name = extract_person_name(text)
+    return get_who_info(name)
 
-                # 1. 時間查詢
-                if is_time_query(text):
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=handle_time_query())]
-                    ))
-                    continue
+# —— 泛用屬性查詢 ——
+def handle_general_info_query(text):
+    name = extract_person_name(text)
+    attr = extract_general_attribute(text)
+    prompt = f"請簡要回答『{name}』的{attr}，依據公開資訊，一句話即可。"
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        ans = resp.choices[0].message.content.strip()
+        if not ans or any(k in ans for k in ["不知道", "無法", "查無"]):
+            raise ValueError("GPT 無效回應")
+        return f"『{name}』的{attr}是：{ans}"
+    except (OpenAIError, ValueError):
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} {attr}') }"
 
-                # 2. 年齡查詢
-                if is_age_query(text):
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=handle_age_query(text))]
-                    ))
-                    continue
+# —— GPT + fallback ——
+def get_who_info(name):
+    prompt = f"請用一句話簡要介紹『{name}』的身份或背景。"
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        info = resp.choices[0].message.content.strip()
+        if not info or "不知道" in info:
+            raise ValueError
+        return info
+    except (OpenAIError, ValueError):
+        return f"📡 以下是網路搜尋結果：\n{search_all_sources(name)}"
 
-                # 3. 「是誰」查詢
-                if is_who_query(text):
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=handle_who_query(text))]
-                    ))
-                    continue
+# —— 擷取出生日期 ——
+def get_birthdate(name):
+    prompt = f"請回傳『{name}』的出生日期，格式 YYYY-MM-DD；若查無資料請回 UNKNOWN。"
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        bd = resp.choices[0].message.content.strip()
+        if not re.match(r"\d{4}-\d{2}-\d{2}", bd):
+            raise ValueError
+        return bd
+    except (OpenAIError, ValueError):
+        return search_all_sources(f"{name} 出生日期")
 
-                # 4. 生日查詢
-                if is_birthday_query(text):
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=handle_birthday_query(text))]
-                    ))
-                    continue
+# —— 抽取人名與屬性 ——
+def extract_person_name(text):
+    m = re.search(r"(.+?)團體.*的(.+?)(?:幾歲|年齡|出生|出道|專輯)?", text)
+    if m:
+        grp, member = m.groups()
+        return f"{grp} 的 {member}"
+    m2 = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|幾歲|年齡|出道|專輯)?", text)
+    return m2.group(1).strip() if m2 else text.strip()
 
-                # 5. 泛用屬性查詢
-                if is_general_info_query(text):
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=handle_general_info_query(text))]
-                    ))
-                    continue
-                # 6. 清除個人知識
-                if is_clear_facts(text):
-                    memory["facts"].clear()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text="🧹 已清除你的個人知識。")]
-                    ))
-                    continue
-
-                # 7. 新事實記憶
-                if fact := extract_user_fact(text):
-                    memory["facts"].append(fact)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"📌 已記住：「{fact}」")]
-                    ))
-                    continue
-
-                # 8. 使用者自訂名稱
-                if new_name := extract_user_name(text):
-                    memory["name"] = new_name
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"好的，我會叫你 {new_name}！")]
-                    ))
-                    continue
-
-                # 9. AI 名稱變更
-                if new_ai := extract_ai_name(text):
-                    memory["ai_name"] = new_ai
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"從現在起，我就叫 {new_ai} 囉！")]
-                    ))
-                    continue
-
-                # 10. 風格切換
-                if new_style := extract_user_style(text):
-                    memory["style"] = new_style
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"已切換為「{new_style}」風格。")]
-                    ))
-                    continue
-
-                # 11. 翻譯流程
-                if memory["translate_pending"]:
-                    original = memory.pop("translate_pending")
-                    translated = translate_text(original, text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"翻譯成「{text}」結果：\n{original} → {translated}")]
-                    ))
-                    continue
-                if is_translate_request(text):
-                    memory["translate_pending"] = text.replace("翻譯", "").strip()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text="你想翻譯成哪一種語言呢？")]
-                    ))
-                    continue
-
-                # 12. YouTube 下載
-                if text.startswith("下載影片"):
-                    handle_youtube_download(event, api, media_type="video")
-                    continue
-                if text.startswith("下載音訊") or text.startswith("下載音樂"):
-                    handle_youtube_download(event, api, media_type="audio")
-                    continue
-
-                # 13. 圖片風格生成
-                if is_stylegen_request(text):
-                    memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text="請傳一張圖片給我套用風格～")]
-                    ))
-                    continue
-
-                # 14. 圖片訊息產生
-                if is_image_request(text):
-                    msg = generate_image_message(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
-                    continue
-
-                # 15. 影片搜尋卡片
-                if is_video_request(text):
-                    msg = search_youtube_card(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
-                    continue
-
-                # 16. 交通時刻表
-                if is_transport_request(text):
-                    msg = get_thsr_schedule()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
-                    continue
-
-                # 17. 抽運勢/塔羅
-                if is_draw_request(text):
-                    out = draw_tarot() if "塔羅" in text.lower() else draw_fortune()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=out)]
-                    ))
-                    continue
-
-                # 18. 梅花易數
-                if is_meihua_request(text):
-                    out = generate_meihua_hexagram()
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=out)]
-                    ))
-                    continue
-
-                # 19. 地圖生成
-                if is_map_request(text):
-                    out = generate_map_image(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[out]
-                    ))
-                    continue
-
-                # 20. 天氣查詢
-                if is_weather_request(text):
-                    out = get_weather_by_location(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=out)]
-                    ))
-                    continue
-
-                # 21. 通用 GPT 回覆
-                reply = generate_gpt_reply(
-                    user_id=user_id,
-                    user_msg=text,
-                    history=memory["history"],
-                    user_name=memory["name"],
-                    ai_name=memory["ai_name"],
-                    style=memory["style"],
-                    facts=memory["facts"]
-                )
-                if any(k in reply for k in ["我不知道", "無法提供", "不確定", "請自行查"]):
-                    reply += "\n\n" + search_all_sources(text)
-
-                memory["history"].append({"role": "user", "content": text})
-                memory["history"].append({"role": "assistant", "content": reply})
-                user_label = memory["display_name"] or memory["name"] or "朋友"
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[V3TextMessage(text=f"{user_label}～{reply}")]
-                ))
-                continue
-
-            # —— 圖片／音訊處理 ——  
-            if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
-                if style := memory.get("user_pending_stylegen"):
-                    memory["user_pending_stylegen"] = None
-                    src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
-                    styled = generate_stylized_image(src, style)
-                    if styled:
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[V3ImageMessage(
-                                original_content_url=styled,
-                                preview_image_url=styled
-                            )]
-                        ))
-                    else:
-                        api.reply_message(ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[V3TextMessage(text="❌ 圖片風格生成失敗")]
-                        ))
-                    continue
-
-                analysis = analyze_image_with_gpt(
-                    message_id=event.message.id,
-                    api=api,
-                    user_name=memory["name"],
-                    ai_name=memory["ai_name"],
-                    style=memory["style"]
-                )
-                api.reply_message(ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[V3TextMessage(text=analysis)]
-                ))
-                continue
-
-            if isinstance(event, MessageEvent) and isinstance(event.message, AudioMessageContent):
-                transcript = transcribe_audio_from_line(event.message.id, api)
-                if transcript:
-                    reply = generate_gpt_reply(
-                        user_id=user_id,
-                        user_msg=transcript,
-                        history=memory["history"],
-                        user_name=memory["name"],
-                        ai_name=memory["ai_name"],
-                        style=memory["style"],
-                        facts=memory["facts"]
-                    )
-                    memory["history"].append({"role": "user", "content": transcript})
-                    memory["history"].append({"role": "assistant", "content": reply})
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
-                    ))
-                    continue
-
-    return "OK", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+def extract_general_attribute(text):
+    m = re.search(r"請問\s*(?:.+?)\s*(?:他|她|TA)\s*(.+)", text)
+    return m.group(1).strip() if m else "資料"
