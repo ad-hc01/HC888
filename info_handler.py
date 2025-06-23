@@ -4,22 +4,22 @@
 
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from openai import OpenAI, OpenAIError
 from search_web import search_all_sources
-from user_info import get_user_info  # 用於取得即時在地時間
 
 client = OpenAI()
+
+# 設定使用台北時區
+TZ = ZoneInfo("Asia/Taipei")
 
 # —— 即時時間查詢 ——  
 def is_time_query(text: str) -> bool:
     return bool(re.search(r"現在\s*幾點", text))
 
 def handle_time_query() -> str:
-    info = get_user_info()  # { location, local_time: datetime, ... }
-    local_time = info.get("local_time")
-    if local_time:
-        return f"現在的在地時間是 {local_time.strftime('%H:%M')}。"
-    return "抱歉，無法取得當前時間資訊。"
+    now = datetime.now(TZ)
+    return f"現在台北時間是 {now.strftime('%H:%M')}。"
 
 # —— 是誰查詢 ——  
 def is_who_query(text: str) -> bool:
@@ -37,12 +37,10 @@ def handle_birthday_query(text: str) -> str:
     name = extract_person_name(text)
     bd = get_birthdate(name)
     if re.match(r"\d{4}-\d{2}-\d{2}", bd):
-        info = get_user_info()
-        local_time = info.get("local_time")
-        today = local_time.date() if local_time else datetime.now().date()
+        now = datetime.now(TZ).date()
         y, m, d = map(int, bd.split("-"))
-        age = today.year - y - ((today.month, today.day) < (m, d))
-        return f"『{name}』出生於 {bd}，截至 {today}，年齡為 {age} 歲。"
+        age = now.year - y - ((now.month, now.day) < (m, d))
+        return f"『{name}』出生於 {bd}，截至 {now}，年齡為 {age} 歲。"
     return bd
 
 # —— 泛用屬性查詢 ——  
@@ -90,6 +88,7 @@ def get_who_info(name: str) -> str:
         return info
     except (OpenAIError, ValueError):
         return search_all_sources(name)
+
 
 def get_birthdate(name: str) -> str:
     prompt = f"請僅回傳『{name}』的出生日期，格式 YYYY-MM-DD；如無公開資訊請回覆 UNKNOWN。"
