@@ -1,83 +1,66 @@
 # -*- coding: utf-8 -*-
-# 本模組為網站標題變更監聽器，偵測特定網址的 title 或內文是否有變動，並推播通知至指定群組
+# 本模組為網站驗證題目監聽器，從 LINE 指令動態觸發，偵測指定題目區塊並推播 LINE 群組
 
-import os
 import threading
 import time
 import requests
 from bs4 import BeautifulSoup
-from linebot.v3.messaging import MessagingApi, Configuration, ApiClient
+from linebot.v3.messaging import MessagingApi
 from linebot.v3.messaging.models import TextMessage as V3TextMessage, PushMessageRequest
 
-MONITORED_URL = "https://www.example.com"
-GROUP_ID = "C6c465dd5a162fd79182d7b92eccc2d57"
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 60  # 檢查間隔秒數
 
-config = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
-line_api = MessagingApi(api_client=ApiClient(config))
+monitor_thread = None          # 執行緒物件
+monitor_stop_event = None      # 停止旗標
 
-last_title = None
-_monitor_thread = None
-_monitor_stop_event = threading.Event()
+def start_monitor(url: str, group_id: str, line_api: MessagingApi) -> str:
+    global monitor_thread, monitor_stop_event
 
-def fetch_title(url: str) -> str:
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        title_tag = soup.find("title")
-        return title_tag.text.strip() if title_tag else "(無標題)"
-    except Exception as e:
-        return f"(無法取得標題: {e})"
+    if monitor_thread and monitor_thread.is_alive():
+        return "⚠️ 已有監聽任務執行中，請先停止。"
 
-def _monitor_title():
-    global last_title
-    while not _monitor_stop_event.is_set():
-        current_title = fetch_title(MONITORED_URL)
-        if last_title is not None and current_title != last_title:
-            msg = f"🔔 網站標題已變更！\n原本：{last_title}\n現在：{current_title}"
+    monitor_stop_event = threading.Event()
+
+    def loop():
+        while not monitor_stop_event.is_set():
             try:
-                line_api.push_message(
-                    PushMessageRequest(
-                        to=GROUP_ID,
-                        messages=[V3TextMessage(text=msg)]
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, "html.parser")
+
+                title_el = soup.select_one(".promo-title")
+                desc_el = soup.select_one(".promo-desc")
+                input_el = soup.select_one('input[name="checkCode"]')
+
+                if title_el and desc_el and input_el:
+                    msg = (
+                        "🎯 發現驗證題目區塊！\n"
+                        f"📌 區塊標題：{title_el.get_text(strip=True)}\n"
+                        f"📝 題目內容：{desc_el.get_text(strip=True)}\n"
+                        f"🧩 已出現填空欄位 name=checkCode"
                     )
-                )
+                    line_api.push_message(PushMessageRequest(
+                        to=group_id,
+                        messages=[V3TextMessage(text=msg)]
+                    ))
+                else:
+                    print("[偵測中] 尚未出現完整題目結構")
             except Exception as e:
-                print(f"[錯誤] 推播失敗：{e}")
-        last_title = current_title
-        _monitor_stop_event.wait(CHECK_INTERVAL)
+                print(f"[錯誤] 擷取失敗：{e}")
+            time.sleep(CHECK_INTERVAL)
 
-def start_monitor(url=None, group_id=None, api=None):
-    global MONITORED_URL, GROUP_ID, line_api, _monitor_thread, _monitor_stop_event
+    monitor_thread = threading.Thread(target=loop, daemon=True)
+    monitor_thread.start()
+    return f"✅ 已啟動監聽：{url}"
 
-    if url:
-        MONITORED_URL = url
-    if group_id:
-        GROUP_ID = group_id
-    if api:
-        line_api = api
+def stop_monitor() -> str:
+    global monitor_thread, monitor_stop_event
+    if monitor_thread and monitor_thread.is_alive():
+        monitor_stop_event.set()
+        return "🛑 已停止監聽"
+    return "ℹ️ 目前沒有監聽任務在執行中"
 
-    if _monitor_thread and _monitor_thread.is_alive():
-        return "監聽已經在執行中"
-
-    _monitor_stop_event.clear()
-    _monitor_thread = threading.Thread(target=_monitor_title, daemon=True)
-    _monitor_thread.start()
-    return f"開始監聽網址：{MONITORED_URL}"
-
-def stop_monitor():
-    global _monitor_stop_event, _monitor_thread
-    if _monitor_thread and _monitor_thread.is_alive():
-        _monitor_stop_event.set()
-        _monitor_thread.join()
-        return "監聽已停止"
-    else:
-        return "目前沒有監聽中的任務"
-
-def get_monitor_status():
-    global _monitor_thread
-    if _monitor_thread and _monitor_thread.is_alive():
-        return f"監聽中網址：{MONITORED_URL}"
-    else:
-        return "目前沒有監聽任務"
+def get_monitor_status() -> str:
+    if monitor_thread and monitor_thread.is_alive():
+        return "📡 監聽中..."
+    return "🔕 未在監聽狀態"
