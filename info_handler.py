@@ -9,24 +9,24 @@ from openai import OpenAI, OpenAIError
 from search_web import search_all_sources
 
 client = OpenAI()
-# 設定使用台北時區
 TZ = ZoneInfo("Asia/Taipei")
 
-# —— 即時時間查詢 ——
-def is_time_query(text: str) -> bool:
-    return bool(re.search(r"現在\s*幾點", text))
+# —— 查詢類型判斷 ——
+def is_time_query(text): return "現在幾點" in text
+def is_age_query(text): return bool(re.search(r"(幾歲|年齡)", text))
+def is_who_query(text): return bool(re.search(r"是誰", text))
+def is_birthday_query(text): return bool(re.search(r"(生日|出生日期)", text))
+def is_general_info_query(text): return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)", text))
 
-def handle_time_query() -> str:
+# —— 即時時間查詢 ——
+def handle_time_query():
     now = datetime.now(TZ)
-    return f"現在台北時間是 {now.strftime('%H:%M')}。"
+    return f"🕒 現在台北時間是 {now.strftime('%H:%M')}。"
 
 # —— 年齡查詢 ——
-def is_age_query(text: str) -> bool:
-    return bool(re.search(r"幾歲|年齡", text))
-
-def handle_age_query(text: str) -> str:
+def handle_age_query(text):
     name = extract_person_name(text)
-    prompt = f"請問『{name}』目前幾歲？請僅回傳年齡數字。"
+    prompt = f"請問『{name}』目前幾歲？請僅回傳年齡數字（例如：20）。"
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
@@ -34,42 +34,33 @@ def handle_age_query(text: str) -> str:
             temperature=0
         )
         age = resp.choices[0].message.content.strip()
-        if not re.match(r"\d+", age):
-            raise ValueError("GPT 未返回有效年齡")
+        if not re.match(r"^\d{1,3}$", age):
+            raise ValueError("GPT 回傳格式錯誤")
         return f"『{name}』目前 {age} 歲。"
     except (OpenAIError, ValueError):
-        return search_all_sources(f"{name} 年齡")
-
-# —— 是誰查詢 ——
-def is_who_query(text: str) -> bool:
-    return bool(re.search(r"(?:請問\s*)?(.+?)\s*是誰", text))
-
-def handle_who_query(text: str) -> str:
-    name = extract_person_name(text)
-    return get_who_info(name)
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} 年齡')}"
 
 # —— 生日查詢 ——
-def is_birthday_query(text: str) -> bool:
-    return bool(re.search(r"(?:請問\s*)?(.+?)\s*(?:的)?(?:生日|出生日期)", text))
-
-def handle_birthday_query(text: str) -> str:
+def handle_birthday_query(text):
     name = extract_person_name(text)
     bd = get_birthdate(name)
     if re.match(r"\d{4}-\d{2}-\d{2}", bd):
-        now = datetime.now(TZ).date()
+        today = datetime.now(TZ).date()
         y, m, d = map(int, bd.split("-"))
-        age = now.year - y - ((now.month, now.day) < (m, d))
-        return f"『{name}』出生於 {bd}，截至 {now}，年齡為 {age} 歲。"
-    return bd
+        age = today.year - y - ((today.month, today.day) < (m, d))
+        return f"『{name}』出生於 {y} 年 {m} 月 {d} 日，截至今天 {today}，她 {age} 歲。"
+    return f"📡 查不到『{name}』的出生日期，以下是網路結果：\n{bd}"
+
+# —— 是誰查詢 ——
+def handle_who_query(text):
+    name = extract_person_name(text)
+    return get_who_info(name)
 
 # —— 泛用屬性查詢 ——
-def is_general_info_query(text: str) -> bool:
-    return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)\?*", text))
-
-def handle_general_info_query(text: str) -> str:
+def handle_general_info_query(text):
     name = extract_person_name(text)
     attr = extract_general_attribute(text)
-    prompt = f"請提供『{name}』的{attr}，需依據公開資訊並簡要回答。"
+    prompt = f"請簡要回答『{name}』的{attr}，依據公開資訊，一句話即可。"
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
@@ -77,24 +68,15 @@ def handle_general_info_query(text: str) -> str:
             temperature=0
         )
         ans = resp.choices[0].message.content.strip()
-        if not ans or any(k in ans for k in ["不知道", "抱歉"]):
-            raise ValueError("GPT 未返回有效資訊")
-        return ans
+        if not ans or any(k in ans for k in ["不知道", "無法", "查無"]):
+            raise ValueError("GPT 沒回應出有效資訊")
+        return f"{name}的{attr}是：{ans}"
     except (OpenAIError, ValueError):
-        return search_all_sources(f"{name} {attr}")
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} {attr}')}"
 
-# —— 萃取人名與屬性 ——
-def extract_person_name(text: str) -> str:
-    match = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|他|她|TA)", text)
-    return match.group(1).strip() if match else text.strip()
-
-def extract_general_attribute(text: str) -> str:
-    match = re.search(r"請問\s*(?:.+?)\s*(?:他|她|TA)\s*(.+)\?*", text)
-    return match.group(1).strip() if match else text.strip()
-
-# —— GPT + 網路搜尋後備 ——
-def get_who_info(name: str) -> str:
-    prompt = f"請提供簡潔明確的『{name}』介紹，包括身份背景，字數不要超過兩句。"
+# —— GPT 回答失敗時使用 fallback 查詢 ——
+def get_who_info(name):
+    prompt = f"請用一句話簡要介紹『{name}』的身份或背景。"
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
@@ -102,15 +84,15 @@ def get_who_info(name: str) -> str:
             temperature=0
         )
         info = resp.choices[0].message.content.strip()
-        if not info or any(k in info for k in ["不知道", "抱歉"]):
-            raise ValueError("GPT 未返回有效資訊")
+        if not info or "不知道" in info:
+            raise ValueError("空白或無效")
         return info
     except (OpenAIError, ValueError):
-        return search_all_sources(name)
+        return f"📡 以下是網路搜尋結果：\n{search_all_sources(name)}"
 
-
-def get_birthdate(name: str) -> str:
-    prompt = f"請僅回傳『{name}』的出生日期，格式 YYYY-MM-DD；如無公開資訊請回覆 UNKNOWN。"
+# —— 擷取出生日期 ——
+def get_birthdate(name):
+    prompt = f"請回傳『{name}』的出生日期，格式為 YYYY-MM-DD。若查無資料請回 UNKNOWN。"
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
@@ -119,7 +101,16 @@ def get_birthdate(name: str) -> str:
         )
         bd = resp.choices[0].message.content.strip()
         if not re.match(r"\d{4}-\d{2}-\d{2}", bd):
-            raise ValueError("格式不符")
+            raise ValueError("格式錯")
         return bd
     except (OpenAIError, ValueError):
         return search_all_sources(f"{name} 出生日期")
+
+# —— 擷取人名與屬性 ——
+def extract_person_name(text):
+    match = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|他|她|TA|幾歲|年齡)?", text)
+    return match.group(1).strip() if match else text.strip()
+
+def extract_general_attribute(text):
+    match = re.search(r"請問\s*(?:.+?)\s*(?:他|她|TA)\s*(.+)", text)
+    return match.group(1).strip() if match else "資料"
