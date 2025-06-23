@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-# 本檔案為 GPT 對話處理模組，處理上下文、風格注入、使用者知識學習與延伸建議
+# 本檔案為 GPT 對話處理模組，處理上下文、風格注入、使用者知識學習
 
 import os
 from openai import OpenAI
 
-# 初始化 OpenAI 客戶端，從環境變數自動讀取 API 金鑰
+# 初始化 OpenAI 客戶端
 client = OpenAI()
-
 
 def generate_gpt_reply(user_id: str,
                        user_msg: str,
@@ -16,44 +15,35 @@ def generate_gpt_reply(user_id: str,
                        style: str,
                        facts: list[str] | None = None) -> str:
     """
-    組裝 GPT 對話請求，加入風格、使用者知識與延伸建議提示。
-    :param facts: 使用者個人知識記憶（可選）
+    組裝 GPT 對話請求，加入語氣風格與使用者知識
     """
-    # 風格指令模板
     style_prompts = {
-        "正式風": "請以專業且客觀的方式回答問題。",
-        "可愛風": "請用可愛、貼近人心的語氣回答，偶爾加點 emoji。",
-        "幽默風": "請用幽默、輕鬆、有趣的方式回答問題，適度加點笑點。",
-        "科學風": "請以嚴謹邏輯、條列清晰方式，像科學家一樣回答。",
-        "生活風": "請以親切、口語、像朋友一樣的語氣來回答。"
+        "正式風": "你是一位有禮貌且專業的助理，回答簡潔清楚，不插科打諢。",
+        "可愛風": "你是一個超級可愛的角色，語氣像卡通人物一樣俏皮，讓人聽了會笑。",
+        "幽默風": "你是一個風趣幽默的朋友，回話要活潑有梗，像是在聊天。",
+        "生活風": "你說話自然不造作，像鄰居或朋友一樣，舉例貼近日常。",
+        "科學風": "你是一位具邏輯與數據導向的科學家，重視推理與事實。"
     }
     style_instruction = style_prompts.get(style, style_prompts["正式風"])
 
     # 使用者知識注入
     facts_prompt = ""
     if facts:
-        facts_prompt = "\n\n以下是使用者的個人資訊，請一併參考：\n" + "\n".join(f"- {f}" for f in facts)
-
-    # 延伸建議提示
-    suggest_prompt = (
-        "請在回答後，自動補充 2~3 條與此主題相關的延伸建議或應用方向，幫助使用者舉一反三。"
-    )
+        facts_prompt = "\n以下是使用者的個人資訊，可納入回應背景：\n" + "\n".join(f"- {f}" for f in facts)
 
     system_prompt = f"""
-你是一位智慧 AI 輔導老師，名稱是「{ai_name}」，你的任務是根據使用者的語氣與習慣回應。
+你是名叫 {ai_name} 的 GPT 助理，說話風格要符合使用者偏好，親切、自然、像人一樣口語化。
 {style_instruction}
-如果問題涉及事實或使用者資訊，可參考他過往提供的資料。{facts_prompt}
-{suggest_prompt}
+請用流暢敘述方式作答，避免條列式（1. 2. 3.）或公式教學語氣。
+如果問題涉及事實，可結合使用者提供的資訊。{facts_prompt}
 """.strip()
 
-    # 組裝訊息
     messages = [{"role": "system", "content": system_prompt}]
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_msg})
 
     try:
-        # 使用新版 OpenAI 客戶端
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
@@ -62,5 +52,4 @@ def generate_gpt_reply(user_id: str,
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        # 回傳友善錯誤訊息
         return f"⚠️ 發生錯誤，無法取得回答。{e}"

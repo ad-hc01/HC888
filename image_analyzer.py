@@ -1,73 +1,61 @@
 # -*- coding: utf-8 -*-
-# 本檔案負責圖片分析功能，使用 GPT-4o 的多模態能力處理 LINE 傳來的圖片內容
+# 本模組負責圖片分析：將 LINE 傳來的圖片下載並以 base64 傳給 GPT 分析
 
-import os
 import base64
-from io import BytesIO
-
 import requests
 from openai import OpenAI
+from linebot.v3.messaging import MessagingApi
 
-# 初始化 OpenAI 客戶端（自動讀取環境變數 OPENAI_API_KEY）
 client = OpenAI()
 
-# LINE 圖片內容 API
-CONTENT_URL = "https://api-data.line.me/v2/bot/message/{message_id}/content"
-
-def analyze_image_with_gpt(
-    message_id: str,
-    user_name: str | None = None,
-    ai_name: str = "AI",
-    style: str = "正式風"
-) -> str:
-    """
-    使用 GPT-4o 分析 LINE 傳來的圖片。
-    直接向 LINE 伺服器拉 binary，再轉 base64 給 GPT 多模態。
-    """
-    # 1. 下載圖片二進位
-    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-    if not token:
-        return "❌ 未設定 LINE_CHANNEL_ACCESS_TOKEN，無法取得圖片。"
-    url = CONTENT_URL.format(message_id=message_id)
-    headers = {"Authorization": f"Bearer {token}"}
+def analyze_image_with_gpt(message_id: str, api: MessagingApi, user_name=None, ai_name="HC", style="正式風") -> str:
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        img_data = resp.content
-    except Exception:
-        return "❌ 取得圖片內容失敗，請稍後再試。"
-
-    # 2. 轉 base64
-    b64 = base64.b64encode(img_data).decode("utf-8")
-    data_uri = f"data:image/png;base64,{b64}"
-
-    # 3. 系統提示
-    style_prefix = f""
-    system_prompt = (
-        f"你是一位具備圖像理解能力的 AI，名稱是「{ai_name}」。"
-        "請根據使用者傳來的圖片進行分析，說明主要物體或場景，並提供觀察建議。"
-    )
-
-    # 4. 組裝多模態訊息
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "請分析這張圖片，說明內容並給予觀察建議。"},
-                {"type": "image_url", "image_url": {"url": data_uri}}
-            ]
+        # 從 LINE 下載圖片
+        headers = {
+            "Authorization": f"Bearer {api.api_client.configuration.access_token}"
         }
-    ]
+        image_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
+        response = requests.get(image_url, headers=headers)
 
-    # 5. 呼叫 GPT-4o
-    try:
+        if response.status_code != 200:
+            return f"❌ 圖片下載失敗（錯誤碼 {response.status_code}），請再試一次。"
+
+        image_data = response.content
+        if not image_data or len(image_data) < 500:
+            return "❌ 圖片內容異常，請確認你上傳的是清晰的圖片格式（非貼圖、非空白）。"
+
+        # 判斷圖片格式
+        content_type = response.headers.get("Content-Type", "image/jpeg")
+        base64_data = base64.b64encode(image_data).decode("utf-8")
+        image_data_url = f"data:{content_type};base64,{base64_data}"
+
+        # 傳給 GPT-4o 處理
+        messages = [
+            {
+                "role": "system",
+                "content": f"你是名叫 {ai_name} 的圖像分析助手，請用「{style}」風格幫助使用者解讀圖片內容。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url
+                        }
+                    }
+                ]
+            }
+        ]
+
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.7,
-            max_tokens=500
-        ).choices[0].message.content.strip()
-        return f"{style_prefix}{result}"
-    except Exception:
-        return "⚠️ 圖片分析失敗，請確認格式或稍後再試。"
+            temperature=0.6,
+            max_tokens=600
+        )
+
+        return result.choices[0].message.content.strip()
+
+    except Exception as e:
+        return f"⚠️ 無法分析圖片，發生錯誤：{e}"

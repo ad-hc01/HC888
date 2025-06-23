@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 本檔案為主控程式，整合 GPT 導師 + 多模組 + 使用者命名記憶 
-# + 翻譯 + YouTube 下載連結 + 地圖/抽卡/天氣 + 圖片風格生成
+# + 翻譯 + YouTube 下載連結 + 地圖/抽卡/天氣 + 圖片風格生成 + 梅花易數 + 喚醒式安靜模式
 
 import os
 import unicodedata
@@ -29,7 +29,8 @@ from utils import (
     extract_user_fact, is_clear_facts,
     is_image_request, is_video_request, is_transport_request,
     is_map_request, is_translate_request,
-    is_draw_request, is_weather_request, is_stylegen_request
+    is_draw_request, is_weather_request, is_stylegen_request,
+    is_meihua_request
 )
 from gpt_handler import generate_gpt_reply
 from image_generator import generate_image_message
@@ -38,30 +39,32 @@ from image_generator_style import generate_stylized_image
 from youtube_handler import search_youtube_card
 from youtube_downloader import handle_youtube_download
 from transport import get_thsr_schedule
-from search_web import search_web_fallback
+from search_web import search_all_sources
 from translate_handler import translate_text
-from draw_handler import draw_fortune, draw_tarot, draw_custom
+from draw_handler import draw_fortune, draw_tarot
 from weather_handler import get_weather_by_location
 from extended_modules.map_handler import generate_map_image
 from extended_modules.tts_handler import generate_tts_audio
 from extended_modules.stt_handler import transcribe_audio_from_line
+from meihua_handler import generate_meihua_hexagram
 
 app = Flask(__name__)
 parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
 cfg = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 
-# 使用者記憶結構
 user_data = defaultdict(lambda: {
     "name": None,
     "display_name": None,
     "ai_name": "HC",
     "style": "正式風",
-    "history": deque(maxlen=20),
+    "history": deque(maxlen=50),
     "facts": [],
     "translate_pending": None,
     "user_pending_stylegen": None,
     "has_welcomed": False
 })
+
+activated_users = set()  # ⬅️ 用來記錄哪些 user_id 已經喚醒過了
 
 def normalize_text(text: str) -> str:
     return unicodedata.normalize('NFKC', text).lower()
@@ -81,18 +84,33 @@ def callback():
             user_id = event.source.user_id
             memory = user_data[user_id]
 
-            # 更新用戶顯示名稱
             try:
                 profile = api.get_profile(user_id)
                 memory["display_name"] = profile.display_name
             except Exception:
                 pass
 
-            # 處理文字訊息
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 text = event.message.text.strip()
 
-                # 清除知識／記住事實／改名／切換風格
+                # 💤 安靜模式控制（只在首次提及 AI 名稱時觸發互動）
+                if user_id not in activated_users:
+                    if memory["ai_name"].lower() in normalize_text(text):
+                        activated_users.add(user_id)
+                        memory["has_welcomed"] = True
+                        welcome = (
+                            f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n"
+                            "之後你可以直接講話，不用再說 HC 也會理你喔！"
+                        )
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[V3TextMessage(text=welcome)]
+                        ))
+                        continue
+                    else:
+                        continue  # 尚未被喚醒者不處理，安靜模式
+                # 🟢 已被喚醒者，開始處理後續對話
+
                 if is_clear_facts(text):
                     memory["facts"].clear()
                     api.reply_message(ReplyMessageRequest(
@@ -129,7 +147,6 @@ def callback():
                     ))
                     continue
 
-                # 翻譯
                 if memory["translate_pending"]:
                     original = memory.pop("translate_pending")
                     translated = translate_text(original, text)
@@ -146,7 +163,6 @@ def callback():
                     ))
                     continue
 
-                # YouTube 下載
                 if text.startswith("下載影片"):
                     handle_youtube_download(event, api, media_type="video")
                     continue
@@ -154,20 +170,6 @@ def callback():
                     handle_youtube_download(event, api, media_type="audio")
                     continue
 
-                # **即時對話：不需喊名字，直接回應**
-                if not memory["has_welcomed"]:
-                    memory["has_welcomed"] = True
-                    welcome = (
-                        f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n"
-                        "隨時跟我說話就可以了，不用再喊我的名字！"
-                    )
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=welcome)]
-                    ))
-                    continue
-
-                # 單一模組指令
                 if is_stylegen_request(text):
                     memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
                     api.reply_message(ReplyMessageRequest(
@@ -188,13 +190,17 @@ def callback():
                     api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg]))
                     continue
                 if is_draw_request(text):
-                    if "運勢" in text:
-                        out = draw_fortune()
-                    elif "塔羅" in text.lower():
+                    if "塔羅" in text.lower():
                         out = draw_tarot()
                     else:
-                        pool = text.split("抽")[-1].strip().split("、")
-                        out = draw_custom(pool)
+                        out = draw_fortune()
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=out)]
+                    ))
+                    continue
+                if is_meihua_request(text):
+                    out = generate_meihua_hexagram()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
@@ -212,7 +218,6 @@ def callback():
                     ))
                     continue
 
-                # GPT 回應
                 reply = generate_gpt_reply(
                     user_id=user_id,
                     user_msg=text,
@@ -222,8 +227,9 @@ def callback():
                     style=memory["style"],
                     facts=memory["facts"]
                 )
-                if any(kw in reply for kw in ["我不知道", "無法提供"]):
-                    reply += "\n\n" + search_web_fallback(text)
+                if any(kw in reply for kw in ["我不知道", "無法提供", "不確定", "請自行查"]):
+                    reply += "\n\n" + search_all_sources(text)
+
                 memory["history"].append({"role": "user", "content": text})
                 memory["history"].append({"role": "assistant", "content": reply})
                 user_label = memory["display_name"] or memory["name"] or "朋友"
@@ -233,7 +239,6 @@ def callback():
                 ))
                 continue
 
-            # 處理圖片訊息
             if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
                 if style := memory.get("user_pending_stylegen"):
                     memory["user_pending_stylegen"] = None
@@ -267,7 +272,6 @@ def callback():
                 ))
                 continue
 
-            # 處理語音訊息
             if isinstance(event, MessageEvent) and isinstance(event.message, AudioMessageContent):
                 transcript = transcribe_audio_from_line(event.message.id, api)
                 if transcript:
