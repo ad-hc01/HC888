@@ -31,8 +31,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
-    is_prompt_enhance_request, is_image_request,
-    is_video_request, is_transport_request,
+    is_image_request, is_video_request, is_transport_request,
     is_map_request, is_translate_request,
     is_draw_request, is_weather_request, is_stylegen_request,
     is_meihua_request
@@ -40,7 +39,6 @@ from utils import (
 from gpt_handler import generate_gpt_reply
 from image_generator import generate_image_message
 from image_generator_style import generate_stylized_image
-from image_analyzer import analyze_image_with_gpt
 from youtube_handler import search_youtube_card
 from youtube_downloader import handle_youtube_download
 from transport import get_thsr_schedule
@@ -51,6 +49,8 @@ from weather_handler import get_weather_by_location
 from extended_modules.map_handler import generate_map_image
 from extended_modules.stt_handler import transcribe_audio_from_line
 from meihua_handler import generate_meihua_hexagram
+from realtime_monitor import start_monitor, stop_monitor, get_monitor_status  # ✅ 新增匯入
+
 
 app = Flask(__name__)
 parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
@@ -92,7 +92,7 @@ def callback():
             user_id = getattr(event.source, "user_id", None)
             memory = user_data[user_id]
 
-            # 更新顯示名稱
+            # 嘗試更新顯示名稱
             try:
                 profile = api.get_profile(user_id)
                 memory["display_name"] = profile.display_name
@@ -101,17 +101,14 @@ def callback():
 
             # 處理文字或音訊
             if isinstance(event.message, TextMessageContent) or isinstance(event.message, AudioMessageContent):
-                # 音訊先 STT
                 if isinstance(event.message, AudioMessageContent):
                     try:
                         text = transcribe_audio_from_line(event.message.id) or ""
                     except Exception as e:
-                        api.reply_message(
-                            ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[V3TextMessage(text=f"⚠️ 音訊轉文字失敗：{e}")]
-                            )
-                        )
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[V3TextMessage(text=f"⚠️ 音訊轉文字失敗：{e}")]
+                        ))
                         continue
                 else:
                     text = event.message.text.strip()
@@ -121,29 +118,14 @@ def callback():
                     if memory["ai_name"].lower() in normalize_text(text):
                         activated_users.add(user_id)
                         memory["has_welcomed"] = True
-                        api.reply_message(
-                            ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[V3TextMessage(
-                                    text=f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n以後直接講即可，不用再說 HC！"
-                                )]
-                            )
-                        )
-                    continue
-
-                # **新增：文字即觸發圖片生成**
-                if is_prompt_enhance_request(text):
-                    img_msg = generate_image_message(text)
-                    api.reply_message(
-                        ReplyMessageRequest(
+                        api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[img_msg]
-                        )
-                    )
-                    # 不再處理其他文字邏輯
+                            messages=[V3TextMessage(
+                                text=f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n以後直接講即可，不用再說 HC！"
+                            )]
+                        ))
                     continue
 
-                # 依序判斷各功能
                 try:
                     if is_time_query(text):
                         reply = handle_time_query()
@@ -162,9 +144,6 @@ def callback():
                     elif is_clear_facts(text):
                         memory["facts"].clear()
                         reply = "🧹 已清除你的個人知識。"
-                    elif text in ["重置對話", "清空對話"]:
-                        memory["history"].clear()
-                        reply = "✅ 已重置對話歷史，請開始新的指令！"
                     elif fact := extract_user_fact(text):
                         memory["facts"].append(fact)
                         reply = f"📌 已記住：「{fact}」"
@@ -184,12 +163,22 @@ def callback():
                     elif text.startswith("翻譯"):
                         memory["translate_pending"] = text.replace("翻譯", "").strip()
                         reply = "你想翻譯成哪一種語言呢？"
-                    elif text.startswith(("下載影片", "下載音訊", "下載音樂")):
-                        handle_youtube_download(
-                            event, api,
-                            media_type="audio" if "音" in text else "video"
-                        )
+                    elif text.startswith("下載影片") or text.startswith("下載音訊") or text.startswith("下載音樂"):
+                        handle_youtube_download(event, api,
+                                                media_type="audio" if "音" in text else "video")
                         continue
+
+                    # ✅ 網站標題監聽指令
+                    elif text.startswith("啟動監聽:"):
+                        raw = text.replace("啟動監聽:", "").strip()
+                        reply = start_monitor(raw, getattr(event.source, "group_id", None) or event.source.user_id, api)
+
+                    elif text == "停止監聽":
+                        reply = stop_monitor()
+
+                    elif text == "監聽狀態":
+                        reply = get_monitor_status()
+
                     elif is_stylegen_request(text):
                         memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
                         reply = "請傳一張圖片給我套用風格～"
@@ -208,64 +197,47 @@ def callback():
                 except Exception as e:
                     reply = f"⚠️ 處理失敗：{e}"
 
-                # 紀錄並回覆
+                # 紀錄對話並回覆
                 memory["history"].append({"role": "user", "content": text})
                 memory["history"].append({"role": "assistant", "content": reply})
                 label = memory["display_name"] or memory["name"] or "朋友"
-                api.reply_message(
-                    ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"{label}：{reply}")]
-                    )
-                )
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[V3TextMessage(text=f"{label}：{reply}")]
+                ))
                 continue
 
-            # 處理圖片：風格化優先，否則文字生成或解析
+            # 圖片處理
             if isinstance(event.message, ImageMessageContent):
                 try:
-                    # 1) 風格化
                     if style := memory.get("user_pending_stylegen"):
                         memory["user_pending_stylegen"] = None
                         src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
-                        styled_url = generate_stylized_image(src, style)
-                        if styled_url:
+                        styled = generate_stylized_image(src, style)
+                        if styled:
                             msg = V3ImageMessage(
-                                original_content_url=styled_url,
-                                preview_image_url=styled_url
+                                original_content_url=styled,
+                                preview_image_url=styled
                             )
                         else:
                             msg = V3TextMessage(text="❌ 圖片風格生成失敗")
+                    elif is_image_request(memory["history"][-1]["content"]):
+                        msg = generate_image_message(memory["history"][-1]["content"])
                     else:
-                        last_text = memory["history"][-1]["content"]
-                        # 2) 文字觸發圖片生成
-                        if is_prompt_enhance_request(last_text):
-                            msg = generate_image_message(last_text)
-                        # 3) 圖片解析
-                        else:
-                            msg = analyze_image_with_gpt(
-                                message_id=event.message.id,
-                                api=api,
-                                user_name=memory["name"],
-                                ai_name=memory["ai_name"],
-                                style=memory["style"]
-                            )
-                    api.reply_message(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[msg]
-                        )
-                    )
+                        continue
+
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
                 except Exception as e:
-                    api.reply_message(
-                        ReplyMessageRequest(
-                            reply_token=event.reply_token,
-                            messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
-                        )
-                    )
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
+                    ))
                 continue
 
     return "OK", 200
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
