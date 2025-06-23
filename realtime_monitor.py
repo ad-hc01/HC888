@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-# 本模組為網站標題變更監聽器，偵測特定網址的 title 是否有變動，並推播通知至指定群組
+# 本模組為網站標題變更監聽器，偵測特定網址的 title 或內文是否有變動，並推播通知至指定群組
 
+import os
 import threading
 import time
 import requests
 from bs4 import BeautifulSoup
-from linebot.v3.messaging import MessagingApi, Configuration
+from linebot.v3.messaging import MessagingApi, Configuration, ApiClient
 from linebot.v3.messaging.models import TextMessage as V3TextMessage, PushMessageRequest
 
 # 監聽目標網址
