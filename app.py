@@ -5,18 +5,17 @@
 import os
 import unicodedata
 from collections import defaultdict, deque
-from datetime import date
 from flask import Flask, request, abort
 
-# 時間查詢模組
-from time_handler import is_time_query, handle_time_query
-# 年齡與人物資訊模組
-from age_handler import is_age_query, handle_age_query
+# —— 通用查詢模組 ——  
 from info_handler import (
+    is_time_query, handle_time_query,
+    is_age_query, handle_age_query,
     is_who_query, handle_who_query,
     is_birthday_query, handle_birthday_query,
     is_general_info_query, handle_general_info_query
 )
+
 # 其他既有模組匯入
 from linebot.v3 import WebhookParser
 from linebot.v3.messaging import (
@@ -27,6 +26,7 @@ from linebot.v3.webhooks import (
     MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
 )
 from linebot.v3.exceptions import InvalidSignatureError
+
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
@@ -118,46 +118,41 @@ def callback():
 
                 # 1. 時間查詢
                 if is_time_query(text):
-                    reply = handle_time_query()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
+                        messages=[V3TextMessage(text=handle_time_query())]
                     ))
                     continue
 
                 # 2. 年齡查詢
                 if is_age_query(text):
-                    reply = handle_age_query(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
+                        messages=[V3TextMessage(text=handle_age_query(text))]
                     ))
                     continue
 
                 # 3. 「是誰」查詢
                 if is_who_query(text):
-                    reply = handle_who_query(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
+                        messages=[V3TextMessage(text=handle_who_query(text))]
                     ))
                     continue
 
                 # 4. 生日查詢
                 if is_birthday_query(text):
-                    reply = handle_birthday_query(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
+                        messages=[V3TextMessage(text=handle_birthday_query(text))]
                     ))
                     continue
 
                 # 5. 泛用屬性查詢
                 if is_general_info_query(text):
-                    reply = handle_general_info_query(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
+                        messages=[V3TextMessage(text=handle_general_info_query(text))]
                     ))
                     continue
                 # 6. 清除個人知識
