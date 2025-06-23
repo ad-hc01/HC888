@@ -158,11 +158,18 @@ def callback():
                     elif text.startswith("翻譯"):
                         memory["translate_pending"] = text.replace("翻譯", "").strip()
                         reply = "你想翻譯成哪一種語言呢？"
+
                     elif text.startswith("下載影片") or text.startswith("下載音訊") or text.startswith("下載音樂"):
                         handle_youtube_download(event, api,
                                                 media_type="audio" if "音" in text else "video")
                         continue
 
+                    # ✅ 臨時查詢自己 user_id（建議用完即移除）
+                    elif text.strip() == "@我是哪位":
+                        uid = getattr(event.source, "user_id", None)
+                        reply = f"🪪 你的 user_id 是：\n{uid}" if uid else "⚠️ 無法取得使用者 ID。"
+
+                    # ✅ 管理員專用：顯示 user_id
                     elif text.strip() == "@顯示使用者ID":
                         uid = getattr(event.source, "user_id", None)
                         admin_uid = os.getenv("LINE_ADMIN_USER")
@@ -170,6 +177,7 @@ def callback():
                             reply = f"👤 你的使用者 ID 是：\n{uid}"
                         else:
                             reply = "🚫 無權查看使用者 ID。"
+
 
                     elif text.strip() == "@顯示群組ID":
                         gid = getattr(event.source, "group_id", None)
