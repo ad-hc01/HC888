@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 本檔案為主控程式，整合 GPT 導師 + 多模組 + 使用者命名記憶 
-# + 翻譯 + YouTube 下載連結 + 地圖/抽卡/天氣 + 圖片風格生成 + 梅花易數 + 喚醒式安靜模式
+# + 翻譯 + YouTube 下載連結 + 地圖/抽卡/天氣 + 圖片風格生成 + 梅花易數 + 喚醒式安靜模式 + 圖片生成 + 圖像分析
 
 import os
 import unicodedata
@@ -35,11 +35,12 @@ from utils import (
     is_image_request, is_video_request, is_transport_request,
     is_map_request, is_translate_request,
     is_draw_request, is_weather_request, is_stylegen_request,
-    is_meihua_request
+    is_imagegen_request
 )
 from gpt_handler import generate_gpt_reply
-from image_generator import generate_image_message
+from image_generator import generate_image_from_prompt, generate_image_message
 from image_generator_style import generate_stylized_image
+from prompt_enhancer import enhance_prompt_with_style
 from youtube_handler import search_youtube_card
 from youtube_downloader import handle_youtube_download
 from transport import get_thsr_schedule
@@ -51,6 +52,7 @@ from extended_modules.map_handler import generate_map_image
 from extended_modules.stt_handler import transcribe_audio_from_line
 from meihua_handler import generate_meihua_hexagram
 from realtime_monitor import start_monitor, stop_monitor, get_monitor_status
+from image_analyzer import analyze_image_with_gpt
 
 app = Flask(__name__)
 parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
@@ -119,6 +121,30 @@ def callback():
                             messages=[V3TextMessage(
                                 text=f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n以後直接說即可，不用再說 HC！"
                             )]
+                        ))
+                    continue
+
+                if is_imagegen_request(text):
+                    try:
+                        prompt = enhance_prompt_with_style(text)
+                        image_url = generate_image_from_prompt(prompt)
+
+                        if image_url.startswith("http"):
+                            msg = V3ImageMessage(
+                                original_content_url=image_url,
+                                preview_image_url=image_url
+                            )
+                        else:
+                            msg = V3TextMessage(text=image_url)
+
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[msg]
+                        ))
+                    except Exception as e:
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[V3TextMessage(text=f"⚠️ 圖片生成錯誤：{e}")]
                         ))
                     continue
 
@@ -220,30 +246,36 @@ def callback():
 
             if isinstance(event.message, ImageMessageContent):
                 try:
+                    src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
+
                     if style := memory.get("user_pending_stylegen"):
                         memory["user_pending_stylegen"] = None
-                        src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
                         styled = generate_stylized_image(src, style)
                         if styled:
                             msg = V3ImageMessage(
                                 original_content_url=styled,
                                 preview_image_url=styled
                             )
+                            api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[msg]
+                            ))
                         else:
-                            msg = V3TextMessage(text="❌ 圖片風格生成失敗")
-                    elif is_image_request(memory["history"][-1]["content"]):
-                        msg = generate_image_message(memory["history"][-1]["content"])
+                            api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[V3TextMessage(text="❌ 圖片風格生成失敗")]
+                            ))
                     else:
-                        continue
-
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[msg]
-                    ))
+                        # 🔍 使用 GPT 分析圖片（含主題 + OCR）
+                        msgs = analyze_image_with_gpt(event.message.id, api, memory["name"], memory["ai_name"], memory["style"])
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=msgs
+                        ))
                 except Exception as e:
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"\u26a0\ufe0f 圖片處理失敗：{e}")]
+                        messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
                     ))
                 continue
 
