@@ -8,3 +8,4 @@ beautifulsoup4==4.12.3        # 解析 HTML 用
 yt-dlp==2024.4.9              # YouTube 下載連結功能
 gunicorn>=21.2.0              # 生產環境用 WSGI server
 requests>=2.32.3              # 如有模組仍需 requests（已無上限）
+pytesseract
