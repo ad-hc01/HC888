@@ -39,6 +39,10 @@ def is_clear_facts(text: str) -> bool:
 def is_image_request(text: str) -> bool:
     return any(kw in text for kw in ["畫", "生成圖片", "幫我畫", "想像圖"])
 
+def is_imagegen_request(text: str) -> bool:
+    # 直接呼叫 is_image_request 判斷圖片生成請求
+    return is_image_request(text)
+
 def is_video_request(text: str) -> bool:
     return any(kw in text for kw in ["播放", "MV", "YouTube", "推薦影片", "影片"])
 
