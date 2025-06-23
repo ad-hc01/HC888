@@ -131,6 +131,18 @@ def callback():
                         )
                     continue
 
+                # **新增：文字即觸發圖片生成**
+                if is_prompt_enhance_request(text):
+                    img_msg = generate_image_message(text)
+                    api.reply_message(
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[img_msg]
+                        )
+                    )
+                    # 不再處理其他文字邏輯
+                    continue
+
                 # 依序判斷各功能
                 try:
                     if is_time_query(text):
@@ -150,6 +162,9 @@ def callback():
                     elif is_clear_facts(text):
                         memory["facts"].clear()
                         reply = "🧹 已清除你的個人知識。"
+                    elif text in ["重置對話", "清空對話"]:
+                        memory["history"].clear()
+                        reply = "✅ 已重置對話歷史，請開始新的指令！"
                     elif fact := extract_user_fact(text):
                         memory["facts"].append(fact)
                         reply = f"📌 已記住：「{fact}」"
@@ -235,8 +250,10 @@ def callback():
                                 style=memory["style"]
                             )
                     api.reply_message(
-                        ReplyMessageRequest(messages=[msg]),
-                        reply_token=event.reply_token
+                        ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[msg]
+                        )
                     )
                 except Exception as e:
                     api.reply_message(
