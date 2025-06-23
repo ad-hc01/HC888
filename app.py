@@ -49,14 +49,12 @@ from weather_handler import get_weather_by_location
 from extended_modules.map_handler import generate_map_image
 from extended_modules.stt_handler import transcribe_audio_from_line
 from meihua_handler import generate_meihua_hexagram
-from realtime_monitor import start_monitor, stop_monitor, get_monitor_status  # ✅ 新增匯入
-
+from realtime_monitor import start_monitor, stop_monitor, get_monitor_status
 
 app = Flask(__name__)
 parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
 cfg = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 
-# 使用者記憶結構
 user_data = defaultdict(lambda: {
     "name": None,
     "display_name": None,
@@ -92,14 +90,12 @@ def callback():
             user_id = getattr(event.source, "user_id", None)
             memory = user_data[user_id]
 
-            # 嘗試更新顯示名稱
             try:
                 profile = api.get_profile(user_id)
                 memory["display_name"] = profile.display_name
             except:
                 pass
 
-            # 處理文字或音訊
             if isinstance(event.message, TextMessageContent) or isinstance(event.message, AudioMessageContent):
                 if isinstance(event.message, AudioMessageContent):
                     try:
@@ -107,13 +103,12 @@ def callback():
                     except Exception as e:
                         api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[V3TextMessage(text=f"⚠️ 音訊轉文字失敗：{e}")]
+                            messages=[V3TextMessage(text=f"\u26a0\ufe0f 音訊轉文字失敗：{e}")]
                         ))
                         continue
                 else:
                     text = event.message.text.strip()
 
-                # 喚醒式安靜模式
                 if user_id not in activated_users:
                     if memory["ai_name"].lower() in normalize_text(text):
                         activated_users.add(user_id)
@@ -121,7 +116,7 @@ def callback():
                         api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
                             messages=[V3TextMessage(
-                                text=f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n以後直接講即可，不用再說 HC！"
+                                text=f"嗨～我是你專屬助理 {memory['ai_name']} 😊\n以後直接說即可，不用再說 HC！"
                             )]
                         ))
                     continue
@@ -168,7 +163,30 @@ def callback():
                                                 media_type="audio" if "音" in text else "video")
                         continue
 
-                    # ✅ 網站標題監聽指令
+                    elif text.strip() == "@顯示使用者ID":
+                        uid = getattr(event.source, "user_id", None)
+                        admin_uid = os.getenv("LINE_ADMIN_USER")
+                        if uid and uid == admin_uid:
+                            reply = f"👤 你的使用者 ID 是：\n{uid}"
+                        else:
+                            reply = "🚫 無權查看使用者 ID。"
+
+                    elif text.strip() == "@顯示群組ID":
+                        gid = getattr(event.source, "group_id", None)
+                        admin_uid = os.getenv("LINE_ADMIN_USER")
+                        if gid and user_id == admin_uid:
+                            reply = f"👥 此群組 ID 是：\n{gid}"
+                        else:
+                            reply = "🚫 無權查看群組 ID。"
+
+                    elif text.strip() == "@顯示來源ID":
+                        src = getattr(event.source, "group_id", None) or getattr(event.source, "user_id", None)
+                        admin_uid = os.getenv("LINE_ADMIN_USER")
+                        if user_id == admin_uid:
+                            reply = f"🔐 目前來源 ID 是：\n{src}"
+                        else:
+                            reply = "🚫 無權查看來源 ID。"
+
                     elif text.startswith("啟動監聽:"):
                         raw = text.replace("啟動監聽:", "").strip()
                         reply = start_monitor(raw, getattr(event.source, "group_id", None) or event.source.user_id, api)
@@ -195,9 +213,8 @@ def callback():
                         if any(k in reply for k in ["我不知道", "無法提供", "不確定", "請自行查"]):
                             reply += "\n\n" + search_all_sources(text)
                 except Exception as e:
-                    reply = f"⚠️ 處理失敗：{e}"
+                    reply = f"\u26a0\ufe0f 處理失敗：{e}"
 
-                # 紀錄對話並回覆
                 memory["history"].append({"role": "user", "content": text})
                 memory["history"].append({"role": "assistant", "content": reply})
                 label = memory["display_name"] or memory["name"] or "朋友"
@@ -207,7 +224,6 @@ def callback():
                 ))
                 continue
 
-            # 圖片處理
             if isinstance(event.message, ImageMessageContent):
                 try:
                     if style := memory.get("user_pending_stylegen"):
@@ -233,7 +249,7 @@ def callback():
                 except Exception as e:
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
+                        messages=[V3TextMessage(text=f"\u26a0\ufe0f 圖片處理失敗：{e}")]
                     ))
                 continue
 
