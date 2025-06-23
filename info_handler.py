@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # info_handler.py
-# 本模組處理通用人物資訊查詢：身分介紹、年齡查詢、生日查詢、時間查詢及其他屬性問題
+# 本模組處理通用人物資訊查詢：身分介紹、年齡查詢、生日查詢、出道查詢、時間查詢及其他屬性問題
 
 import re
 from datetime import datetime
@@ -13,10 +13,17 @@ TZ = ZoneInfo("Asia/Taipei")
 
 # —— 查詢類型判斷 ——
 def is_time_query(text): return "現在幾點" in text
-def is_age_query(text): return bool(re.search(r"(幾歲|年齡)", text))
+
+def is_age_query(text): return bool(re.search(r"幾歲|年齡", text))
+
+def is_birthday_query(text): return bool(re.search(r"生日|出生日期", text))
+
+def is_debut_query(text): return "出道" in text and not is_birthday_query(text)
+
 def is_who_query(text): return bool(re.search(r"是誰", text))
-def is_birthday_query(text): return bool(re.search(r"(生日|出生日期)", text))
-def is_general_info_query(text): return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)", text))
+
+def is_general_info_query(text):
+    return bool(re.search(r"請問\s*(.+?)\s*(?:他|她|TA)\s*(.+)", text))
 
 # —— 即時時間查詢 ——
 def handle_time_query():
@@ -38,7 +45,9 @@ def handle_age_query(text):
             raise ValueError("GPT 回傳格式錯誤")
         return f"『{name}』目前 {age} 歲。"
     except (OpenAIError, ValueError):
-        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} 年齡')}"
+        # 強化搜尋字串：包含團體與成員
+        query = f"{name} 年齡"
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(query)}"
 
 # —— 生日查詢 ——
 def handle_birthday_query(text):
@@ -50,6 +59,16 @@ def handle_birthday_query(text):
         age = today.year - y - ((today.month, today.day) < (m, d))
         return f"『{name}』出生於 {y} 年 {m} 月 {d} 日，截至今天 {today}，她 {age} 歲。"
     return f"📡 查不到『{name}』的出生日期，以下是網路結果：\n{bd}"
+
+# —— 出道日期查詢 ——
+def handle_debut_query(text):
+    name = extract_person_name(text)
+    result = search_all_sources(f"{name} 出道日期")
+    m = re.search(r"(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})", result)
+    if m:
+        y, mth, d = m.groups()
+        return f"『{name}』於 {y} 年 {mth} 月 {d} 日 出道。"
+    return f"📡 查不到明確出道日期，以下網路結果：\n{result}"
 
 # —— 是誰查詢 ——
 def handle_who_query(text):
@@ -69,12 +88,12 @@ def handle_general_info_query(text):
         )
         ans = resp.choices[0].message.content.strip()
         if not ans or any(k in ans for k in ["不知道", "無法", "查無"]):
-            raise ValueError("GPT 沒回應出有效資訊")
-        return f"{name}的{attr}是：{ans}"
+            raise ValueError("GPT 無效回應")
+        return f"『{name}』的{attr}是：{ans}"
     except (OpenAIError, ValueError):
-        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} {attr}')}"
+        return f"📡 查詢失敗，改為網路搜尋：\n{search_all_sources(f'{name} {attr}') }"
 
-# —— GPT 回答失敗時使用 fallback 查詢 ——
+# —— GPT + fallback ——
 def get_who_info(name):
     prompt = f"請用一句話簡要介紹『{name}』的身份或背景。"
     try:
@@ -85,14 +104,14 @@ def get_who_info(name):
         )
         info = resp.choices[0].message.content.strip()
         if not info or "不知道" in info:
-            raise ValueError("空白或無效")
+            raise ValueError
         return info
     except (OpenAIError, ValueError):
         return f"📡 以下是網路搜尋結果：\n{search_all_sources(name)}"
 
 # —— 擷取出生日期 ——
 def get_birthdate(name):
-    prompt = f"請回傳『{name}』的出生日期，格式為 YYYY-MM-DD。若查無資料請回 UNKNOWN。"
+    prompt = f"請回傳『{name}』的出生日期，格式 YYYY-MM-DD；若查無資料請回 UNKNOWN。"
     try:
         resp = client.chat.completions.create(
             model="gpt-4o",
@@ -101,16 +120,22 @@ def get_birthdate(name):
         )
         bd = resp.choices[0].message.content.strip()
         if not re.match(r"\d{4}-\d{2}-\d{2}", bd):
-            raise ValueError("格式錯")
+            raise ValueError
         return bd
     except (OpenAIError, ValueError):
         return search_all_sources(f"{name} 出生日期")
 
-# —— 擷取人名與屬性 ——
+# —— 抽取人名與屬性 ——
 def extract_person_name(text):
-    match = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|他|她|TA|幾歲|年齡)?", text)
-    return match.group(1).strip() if match else text.strip()
+    # 處理「團體的成員」情境
+    m = re.search(r"(.+?)團體.*的(.+?)(?:幾歲|年齡|出生|出道)?", text)
+    if m:
+        grp, member = m.groups()
+        return f"{grp} 的 {member}"  
+    # 一般模式
+    m2 = re.search(r"(?:請問\s*)?(.+?)\s*(?:是誰|的?生日|出生日期|幾歲|年齡|出道)?", text)
+    return m2.group(1).strip() if m2 else text.strip()
 
 def extract_general_attribute(text):
-    match = re.search(r"請問\s*(?:.+?)\s*(?:他|她|TA)\s*(.+)", text)
-    return match.group(1).strip() if match else "資料"
+    m = re.search(r"請問\s*(?:.+?)\s*(?:他|她|TA)\s*(.+)", text)
+    return m.group(1).strip() if m else "資料"
