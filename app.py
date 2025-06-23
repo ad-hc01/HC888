@@ -8,32 +8,25 @@ from collections import defaultdict, deque
 from datetime import date
 from flask import Flask, request, abort
 
-from linebot.v3 import WebhookParser
-from linebot.v3.messaging import (
-    Configuration,
-    ApiClient,
-    MessagingApi,
-    ReplyMessageRequest,
-    TextMessage as V3TextMessage,
-    ImageMessage as V3ImageMessage
-)
-from linebot.v3.webhooks import (
-    MessageEvent,
-    TextMessageContent,
-    ImageMessageContent,
-    AudioMessageContent
-)
-from linebot.v3.exceptions import InvalidSignatureError
-
-# —— 新增：年齡與人物資訊處理模組 ——
+# 時間查詢模組
+from time_handler import is_time_query, handle_time_query
+# 年齡與人物資訊模組
 from age_handler import is_age_query, handle_age_query
 from info_handler import (
     is_who_query, handle_who_query,
     is_birthday_query, handle_birthday_query,
     is_general_info_query, handle_general_info_query
 )
-
-# —— 既有模組匯入 ——
+# 其他既有模組匯入
+from linebot.v3 import WebhookParser
+from linebot.v3.messaging import (
+    Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
+    TextMessage as V3TextMessage, ImageMessage as V3ImageMessage
+)
+from linebot.v3.webhooks import (
+    MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
+)
+from linebot.v3.exceptions import InvalidSignatureError
 from utils import (
     extract_user_name, extract_ai_name, extract_user_style,
     extract_user_fact, is_clear_facts,
@@ -62,6 +55,7 @@ app = Flask(__name__)
 parser = WebhookParser(os.getenv("LINE_CHANNEL_SECRET"))
 cfg = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 
+# 使用者記憶結構
 user_data = defaultdict(lambda: {
     "name": None,
     "display_name": None,
@@ -90,19 +84,24 @@ def callback():
     with ApiClient(cfg) as client:
         api = MessagingApi(client)
         for event in events:
-            user_id = event.source.user_id
-            memory = user_data[user_id]
-            try:
-                profile = api.get_profile(user_id)
-                memory["display_name"] = profile.display_name
-            except:
-                pass
+            # 僅處理 MessageEvent
+            if not isinstance(event, MessageEvent):
+                continue
 
-            # —— 只處理文字訊息 ——  
-            if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
+            # 處理文字訊息
+            if isinstance(event.message, TextMessageContent):
+                user_id = event.source.user_id
+                memory = user_data[user_id]
+                # 更新 display_name
+                try:
+                    profile = api.get_profile(user_id)
+                    memory["display_name"] = profile.display_name
+                except:
+                    pass
+
                 text = event.message.text.strip()
 
-                # 💤 安靜模式：先喚醒
+                # 💤 喚醒（安靜模式）
                 if user_id not in activated_users:
                     if memory["ai_name"].lower() in normalize_text(text):
                         activated_users.add(user_id)
@@ -115,9 +114,53 @@ def callback():
                             reply_token=event.reply_token,
                             messages=[V3TextMessage(text=welcome)]
                         ))
-                    continue  # 未喚醒前不處理其他
+                    continue
 
-                # —— 基本設定／記憶管理 ——  
+                # 1. 時間查詢
+                if is_time_query(text):
+                    reply = handle_time_query()
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+
+                # 2. 年齡查詢
+                if is_age_query(text):
+                    reply = handle_age_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+
+                # 3. 「是誰」查詢
+                if is_who_query(text):
+                    reply = handle_who_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+
+                # 4. 生日查詢
+                if is_birthday_query(text):
+                    reply = handle_birthday_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+
+                # 5. 泛用屬性查詢
+                if is_general_info_query(text):
+                    reply = handle_general_info_query(text)
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=reply)]
+                    ))
+                    continue
+                # 6. 清除個人知識
                 if is_clear_facts(text):
                     memory["facts"].clear()
                     api.reply_message(ReplyMessageRequest(
@@ -125,6 +168,8 @@ def callback():
                         messages=[V3TextMessage(text="🧹 已清除你的個人知識。")]
                     ))
                     continue
+
+                # 7. 新事實記憶
                 if fact := extract_user_fact(text):
                     memory["facts"].append(fact)
                     api.reply_message(ReplyMessageRequest(
@@ -132,6 +177,8 @@ def callback():
                         messages=[V3TextMessage(text=f"📌 已記住：「{fact}」")]
                     ))
                     continue
+
+                # 8. 使用者自訂名稱
                 if new_name := extract_user_name(text):
                     memory["name"] = new_name
                     api.reply_message(ReplyMessageRequest(
@@ -139,6 +186,8 @@ def callback():
                         messages=[V3TextMessage(text=f"好的，我會叫你 {new_name}！")]
                     ))
                     continue
+
+                # 9. AI 名稱變更
                 if new_ai := extract_ai_name(text):
                     memory["ai_name"] = new_ai
                     api.reply_message(ReplyMessageRequest(
@@ -146,6 +195,8 @@ def callback():
                         messages=[V3TextMessage(text=f"從現在起，我就叫 {new_ai} 囉！")]
                     ))
                     continue
+
+                # 10. 風格切換
                 if new_style := extract_user_style(text):
                     memory["style"] = new_style
                     api.reply_message(ReplyMessageRequest(
@@ -154,7 +205,7 @@ def callback():
                     ))
                     continue
 
-                # —— 翻譯流程 ——  
+                # 11. 翻譯流程
                 if memory["translate_pending"]:
                     original = memory.pop("translate_pending")
                     translated = translate_text(original, text)
@@ -171,12 +222,15 @@ def callback():
                     ))
                     continue
 
-                # —— 媒體／功能模組 ——  
+                # 12. YouTube 下載
                 if text.startswith("下載影片"):
-                    handle_youtube_download(event, api, media_type="video"); continue
+                    handle_youtube_download(event, api, media_type="video")
+                    continue
                 if text.startswith("下載音訊") or text.startswith("下載音樂"):
-                    handle_youtube_download(event, api, media_type="audio"); continue
+                    handle_youtube_download(event, api, media_type="audio")
+                    continue
 
+                # 13. 圖片風格生成
                 if is_stylegen_request(text):
                     memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
                     api.reply_message(ReplyMessageRequest(
@@ -185,78 +239,70 @@ def callback():
                     ))
                     continue
 
+                # 14. 圖片訊息產生
                 if is_image_request(text):
                     msg = generate_image_message(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
+                    continue
 
+                # 15. 影片搜尋卡片
                 if is_video_request(text):
                     msg = search_youtube_card(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
+                    continue
 
+                # 16. 交通時刻表
                 if is_transport_request(text):
                     msg = get_thsr_schedule()
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[msg])); continue
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
+                    continue
 
+                # 17. 抽運勢/塔羅
                 if is_draw_request(text):
                     out = draw_tarot() if "塔羅" in text.lower() else draw_fortune()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
-                    )); continue
+                    ))
+                    continue
 
+                # 18. 梅花易數
                 if is_meihua_request(text):
                     out = generate_meihua_hexagram()
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
-                    )); continue
+                    ))
+                    continue
 
+                # 19. 地圖生成
                 if is_map_request(text):
                     out = generate_map_image(text)
-                    api.reply_message(ReplyMessageRequest(reply_token=event.reply_token, messages=[out])); continue
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[out]
+                    ))
+                    continue
 
+                # 20. 天氣查詢
                 if is_weather_request(text):
                     out = get_weather_by_location(text)
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=out)]
-                    )); continue
-
-                # —— 新增：各類查詢攔截 ——  
-                # 1. 年齡查詢
-                if is_age_query(text):
-                    reply = handle_age_query(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
-                    ))
-                    continue
-                # 2. 是誰查詢
-                if is_who_query(text):
-                    reply = handle_who_query(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
-                    ))
-                    continue
-                # 3. 生日查詢
-                if is_birthday_query(text):
-                    reply = handle_birthday_query(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
-                    ))
-                    continue
-                # 4. 通用屬性查詢
-                if is_general_info_query(text):
-                    reply = handle_general_info_query(text)
-                    api.reply_message(ReplyMessageRequest(
-                        reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=reply)]
                     ))
                     continue
 
-                # —— 其他問題 ——  
+                # 21. 通用 GPT 回覆
                 reply = generate_gpt_reply(
                     user_id=user_id,
                     user_msg=text,
@@ -276,6 +322,7 @@ def callback():
                     reply_token=event.reply_token,
                     messages=[V3TextMessage(text=f"{user_label}～{reply}")]
                 ))
+                continue
 
             # —— 圖片／音訊處理 ——  
             if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
@@ -329,7 +376,7 @@ def callback():
                         reply_token=event.reply_token,
                         messages=[V3TextMessage(text=reply)]
                     ))
-                continue
+                    continue
 
     return "OK", 200
 
