@@ -47,7 +47,7 @@ from draw_handler import draw_fortune, draw_tarot
 from weather_handler import get_weather_by_location
 from extended_modules.map_handler import generate_map_image
 from extended_modules.stt_handler import transcribe_audio_from_line
-from tts_handler import generate_tts_audio
+from extended_modules.tts_handler import generate_tts_audio
 from meihua_handler import generate_meihua_hexagram
 from realtime_monitor import start_monitor, stop_monitor, get_monitor_status
 from image_analyzer import analyze_image_with_gpt
@@ -303,6 +303,7 @@ def callback():
                     reply_token=event.reply_token,
                     messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
                 ))
+
 
     return "OK", 200
 
