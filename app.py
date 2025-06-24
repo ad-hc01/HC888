@@ -157,7 +157,7 @@ def callback():
 
                 # 語音播報
                 if text.startswith("語音播報:"):
-                    from tts_handler import generate_tts_file
+                    from extended_modules.tts_handler import generate_tts_file
                     tts_text = text.split("語音播報:", 1)[1].strip()
                     tts_fp = generate_tts_file(tts_text, memory.get("voice", "nova"))
 
