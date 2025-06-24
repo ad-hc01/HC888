@@ -18,7 +18,7 @@ from linebot.v3 import WebhookParser
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi, ReplyMessageRequest,
     TextMessage as V3TextMessage, ImageMessage as V3ImageMessage,
-    AudioMessage as V3AudioMessage, PushMessageRequest
+    AudioMessage as V3AudioMessage
 )
 from linebot.v3.webhooks import (
     MessageEvent, TextMessageContent, ImageMessageContent, AudioMessageContent
@@ -95,8 +95,7 @@ def callback():
             except:
                 pass
 
-            # ===== 1. 文字/語音處理區 =====
-            # 語音訊息處理
+            # 1. 語音訊息處理
             if isinstance(event.message, AudioMessageContent):
                 try:
                     text = transcribe_audio_from_line(event.message.id) or ""
@@ -132,11 +131,11 @@ def callback():
                     ))
                 continue
 
-            # 文字訊息處理
+            # 2. 文字訊息處理
             if isinstance(event.message, TextMessageContent):
                 text = event.message.text.strip()
 
-                # 回應模式設定
+                # 2.1 回應模式設定
                 if text.startswith("回應模式:"):
                     mode = text.split("回應模式:",1)[1].strip().lower()
                     if mode in ["auto","自動"]:
@@ -156,24 +155,29 @@ def callback():
                     ))
                     continue
 
-                # 語音播報
+                # 2.2 語音播報
                 if text.startswith("語音播報:"):
-                    from pydub import AudioSegment
                     from flask import url_for
                     import os
 
                     tts_text = text.split("語音播報:",1)[1].strip()
                     tts_fp = generate_tts_audio(tts_text, memory.get("voice","nova"))
-                    audio = AudioSegment.from_file(tts_fp)
-                    url = request.url_root.rstrip("/") + url_for("serve_audio", filename=os.path.basename(tts_fp))
+                    # 计算时长，如果 pydub 可用
+                    try:
+                        from pydub import AudioSegment
+                        audio = AudioSegment.from_file(tts_fp)
+                        duration_ms = len(audio)
+                    except ImportError:
+                        duration_ms = 1000
 
+                    url = request.url_root.rstrip("/") + url_for("serve_audio", filename=os.path.basename(tts_fp))
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3AudioMessage(original_content_url=url, duration=len(audio))]
+                        messages=[V3AudioMessage(original_content_url=url, duration=duration_ms)]
                     ))
                     continue
 
-                # 激活 HC
+                # 2.3 激活 HC
                 if user_id not in activated_users and memory["ai_name"].lower() in normalize_text(text):
                     activated_users.add(user_id)
                     api.reply_message(ReplyMessageRequest(
@@ -182,12 +186,12 @@ def callback():
                     ))
                     continue
 
-                # AI 繪圖請求
+                # 2.4 AI 繪圖
                 if is_imagegen_request(text):
                     try:
                         prompt = enhance_prompt_with_style(text)
-                        url = generate_image_from_prompt(prompt)
-                        msg = V3ImageMessage(original_content_url=url, preview_image_url=url) if url.startswith("http") else V3TextMessage(text=url)
+                        img_url = generate_image_from_prompt(prompt)
+                        msg = V3ImageMessage(original_content_url=img_url, preview_image_url=img_url) if img_url.startswith("http") else V3TextMessage(text=img_url)
                         api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
                             messages=[msg]
@@ -199,7 +203,7 @@ def callback():
                         ))
                     continue
 
-                # 其他功能
+                # 2.5 其他功能
                 try:
                     if is_time_query(text):
                         reply = handle_time_query()
@@ -233,7 +237,8 @@ def callback():
                     elif memory["translate_pending"]:
                         orig = memory.pop("translate_pending")
                         trans = translate_text(orig, text)
-                        reply = f"翻譯結果：\n{orig} → {trans}"
+                        reply = f"翻譯結果：
+{orig} → {trans}"
                     elif text.startswith("翻譯"):
                         memory["translate_pending"] = text.split("翻譯",1)[1].strip()
                         reply = "你想翻譯成哪一種語言呢？"
@@ -241,10 +246,8 @@ def callback():
                         reply = generate_gpt_reply(
                             user_id=user_id, user_msg=text,
                             history=memory["history"],
-                            user_name=memory["name"],
-                            ai_name=memory["ai_name"],
-                            style=memory["style"],
-                            facts=memory["facts"]
+                            user_name=memory["name"], ai_name=memory["ai_name"],
+                            style=memory["style"], facts=memory["facts"]
                         )
                 except Exception as e:
                     reply = f"⚠️ 處理失敗：{e}"
