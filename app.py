@@ -98,32 +98,33 @@ def callback():
             except:
                 pass
 
+            # 這一段，**全都要縮排到 for 迴圈內！**
             if isinstance(event.message, TextMessageContent) or isinstance(event.message, AudioMessageContent):
                 if isinstance(event.message, AudioMessageContent):
-    try:
-        text = transcribe_audio_from_line(event.message.id) or ""
-        if not text:
-            raise Exception("轉錄結果為空")
+                    try:
+                        text = transcribe_audio_from_line(event.message.id) or ""
+                        if not text:
+                            raise Exception("轉錄結果為空")
 
-        reply = generate_gpt_reply(
-            user_id=user_id,
-            user_msg=text,
-            history=memory["history"],
-            user_name=memory["name"],
-            ai_name=memory["ai_name"],
-            style=memory["style"],
-            facts=memory["facts"]
-        )
-        memory["history"].append({"role": "user", "content": text})
-        memory["history"].append({"role": "assistant", "content": reply})
+                        reply = generate_gpt_reply(
+                            user_id=user_id,
+                            user_msg=text,
+                            history=memory["history"],
+                            user_name=memory["name"],
+                            ai_name=memory["ai_name"],
+                            style=memory["style"],
+                            facts=memory["facts"]
+                        )
+                        memory["history"].append({"role": "user", "content": text})
+                        memory["history"].append({"role": "assistant", "content": reply})
 
-        voice = memory.get("voice", "nova")      # ⭐ 這行加在這裡
-        voice_msg = generate_tts_audio(reply, voice)  # ⭐ 傳 voice 給 tts_handler
-        api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[voice_msg]
-        ))
-        continue
+                        voice = memory.get("voice", "nova")
+                        voice_msg = generate_tts_audio(reply, voice)
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[voice_msg]
+                        ))
+                        continue
 
                     except Exception as e:
                         api.reply_message(ReplyMessageRequest(
@@ -133,6 +134,9 @@ def callback():
                         continue
                 else:
                     text = event.message.text.strip()
+            # ...後面請維持原本的縮排...
+
+
             if user_id not in activated_users:
                 if memory["ai_name"].lower() in normalize_text(text):
                     activated_users.add(user_id)
