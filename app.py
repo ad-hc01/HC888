@@ -303,7 +303,6 @@ def callback():
                     reply_token=event.reply_token,
                     messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
                 ))
-            continue  # ✅ 正確跳過下一筆 event
 
     return "OK", 200
 
