@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # 語音輸出模組（TTS），將文字轉為音訊並回傳 LINE AudioMessage
 
@@ -50,3 +51,21 @@ def generate_tts_audio(text: str, voice: str = "nova"):
         print(f"[generate_tts_audio] Unexpected error: {e}")
 
     return V3TextMessage(text="⚠️ 語音產生失敗，請稍後再試。")
+
+def generate_tts_file(text: str, voice: str = "nova") -> str | None:
+    """
+    將文字轉為語音音檔，回傳本地暫存路徑。
+    """
+    try:
+        resp = client.audio.speech.create(
+            model="tts-1-hd",
+            voice=voice,
+            input=text
+        )
+        tmp_path = os.path.join(tempfile.gettempdir(), f"tts_{os.getpid()}.mp3")
+        with open(tmp_path, "wb") as f:
+            f.write(resp.content)
+        return tmp_path
+    except Exception as e:
+        print(f"[generate_tts_file] TTS 產生失敗：{e}")
+        return None
