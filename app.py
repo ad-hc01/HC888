@@ -64,9 +64,10 @@ user_data = defaultdict(lambda: {
     "facts": [],
     "translate_pending": None,
     "user_pending_stylegen": None,
-    "has_welcomed": False
+    "has_welcomed": False,   # ← 補這個逗號
     "voice": "nova"
 })
+
 activated_users = set()
 
 def normalize_text(text: str) -> str:
@@ -221,13 +222,12 @@ def callback():
                     reply = f"🔐 目前來源 ID 是：\n{src}" if user_id == admin_uid else "🚫 無權查看來源 ID。"
 
                 elif text.startswith("聲音模式:"):
-    voice_choice = text.replace("聲音模式:", "").strip().lower()
-    if voice_choice in ["nova", "shimmer", "echo", "fable", "onyx"]:
-        memory["voice"] = voice_choice
-        reply = f"✅ 已切換語音模式為「{voice_choice}」"
-    else:
-        reply = "⚠️ 語音模式錯誤，請使用：nova、shimmer、echo、fable、onyx"
-
+                    voice_choice = text.replace("聲音模式:", "").strip().lower()
+                    if voice_choice in ["nova", "shimmer", "echo", "fable", "onyx"]:
+                        memory["voice"] = voice_choice
+                        reply = f"✅ 已切換語音模式為「{voice_choice}」"
+                    else:
+                        reply = "⚠️ 語音模式錯誤，請使用：nova、shimmer、echo、fable、onyx"
 
                 elif text.startswith("啟動監聽:"):
                     raw = text.replace("啟動監聽:", "").strip()
@@ -236,6 +236,7 @@ def callback():
                     reply = stop_monitor()
                 elif text == "監聽狀態":
                     reply = get_monitor_status()
+
                 elif is_stylegen_request(text):
                     memory["user_pending_stylegen"] = text.replace("幫我生成", "").replace("風格", "").strip()
                     reply = "請傳一張圖片給我套用風格～"
@@ -261,46 +262,48 @@ def callback():
                 reply_token=event.reply_token,
                 messages=[V3TextMessage(text=f"{label}：{reply}")]
             ))
-            continue
-            if isinstance(event.message, ImageMessageContent):
-                try:
-                    src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
+            continue  # ✅ 這裡保留，結束 Text 處理迴圈
 
-                    if style := memory.get("user_pending_stylegen"):
-                        memory["user_pending_stylegen"] = None
-                        styled = generate_stylized_image(src, style)
-                        if styled:
-                            msg = V3ImageMessage(
-                                original_content_url=styled,
-                                preview_image_url=styled
-                            )
-                            api.reply_message(ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[msg]
-                            ))
-                        else:
-                            api.reply_message(ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[V3TextMessage(text="❌ 圖片風格生成失敗")]
-                            ))
-                    else:
-                        msgs = analyze_image_with_gpt(
-                            event.message.id,
-                            api,
-                            memory["name"],
-                            memory["ai_name"],
-                            memory["style"]
+        # ✅ 圖片處理：搬出 try 外，才能被執行
+        if isinstance(event.message, ImageMessageContent):
+            try:
+                src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
+
+                if style := memory.get("user_pending_stylegen"):
+                    memory["user_pending_stylegen"] = None
+                    styled = generate_stylized_image(src, style)
+                    if styled:
+                        msg = V3ImageMessage(
+                            original_content_url=styled,
+                            preview_image_url=styled
                         )
                         api.reply_message(ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=msgs
+                            messages=[msg]
                         ))
-                except Exception as e:
+                    else:
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[V3TextMessage(text="❌ 圖片風格生成失敗")]
+                        ))
+                else:
+                    msgs = analyze_image_with_gpt(
+                        event.message.id,
+                        api,
+                        memory["name"],
+                        memory["ai_name"],
+                        memory["style"]
+                    )
                     api.reply_message(ReplyMessageRequest(
                         reply_token=event.reply_token,
-                        messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
+                        messages=msgs
                     ))
-                continue
+            except Exception as e:
+                api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
+                ))
+            continue  # ✅ 正確跳過下一筆 event
 
     return "OK", 200
 
