@@ -95,7 +95,7 @@ def callback():
             except:
                 pass
 
-            # 1. 語音訊息處理
+            # ===== 1. 語音訊息處理 =====
             if isinstance(event.message, AudioMessageContent):
                 try:
                     text = transcribe_audio_from_line(event.message.id) or ""
@@ -131,11 +131,11 @@ def callback():
                     ))
                 continue
 
-            # 2. 文字訊息處理
+            # ===== 2. 文字訊息處理 =====
             if isinstance(event.message, TextMessageContent):
                 text = event.message.text.strip()
 
-                # 2.1 回應模式設定
+                # 回應模式設定
                 if text.startswith("回應模式:"):
                     mode = text.split("回應模式:",1)[1].strip().lower()
                     if mode in ["auto","自動"]:
@@ -155,14 +155,13 @@ def callback():
                     ))
                     continue
 
-                # 2.2 語音播報
+                # 語音播報
                 if text.startswith("語音播報:"):
                     from flask import url_for
                     import os
 
                     tts_text = text.split("語音播報:",1)[1].strip()
                     tts_fp = generate_tts_audio(tts_text, memory.get("voice","nova"))
-                    # 计算时长，如果 pydub 可用
                     try:
                         from pydub import AudioSegment
                         audio = AudioSegment.from_file(tts_fp)
@@ -177,7 +176,7 @@ def callback():
                     ))
                     continue
 
-                # 2.3 激活 HC
+                # 激活 HC
                 if user_id not in activated_users and memory["ai_name"].lower() in normalize_text(text):
                     activated_users.add(user_id)
                     api.reply_message(ReplyMessageRequest(
@@ -186,7 +185,7 @@ def callback():
                     ))
                     continue
 
-                # 2.4 AI 繪圖
+                # AI 繪圖
                 if is_imagegen_request(text):
                     try:
                         prompt = enhance_prompt_with_style(text)
@@ -203,10 +202,10 @@ def callback():
                         ))
                     continue
 
-                # 2.5 其他功能
+                # 其他功能
                 try:
                     if is_time_query(text):
-                        reply = handle_time_query()
+                        reply = handle_time_query()  
                     elif is_age_query(text):
                         reply = handle_age_query(text)
                     elif is_who_query(text):
@@ -237,8 +236,7 @@ def callback():
                     elif memory["translate_pending"]:
                         orig = memory.pop("translate_pending")
                         trans = translate_text(orig, text)
-                        reply = f"翻譯結果：
-{orig} → {trans}"
+                        reply = f"翻譯結果：\n{orig} → {trans}"
                     elif text.startswith("翻譯"):
                         memory["translate_pending"] = text.split("翻譯",1)[1].strip()
                         reply = "你想翻譯成哪一種語言呢？"
@@ -259,6 +257,35 @@ def callback():
                     reply_token=event.reply_token,
                     messages=[V3TextMessage(text=f"{label}：{reply}")]
                 ))
+                continue
+
+            # ===== 3. 圖片訊息處理 =====
+            if isinstance(event.message, ImageMessageContent):
+                try:
+                    src = f"https://api-data.line.me/v2/bot/message/{event.message.id}/content"
+                    if memory.get("user_pending_stylegen"):
+                        style = memory.pop("user_pending_stylegen")
+                        styled_url = generate_stylized_image(src, style)
+                        msg = V3ImageMessage(original_content_url=styled_url, preview_image_url=styled_url)
+                    else:
+                        msgs = analyze_image_with_gpt(
+                            event.message.id, api,
+                            memory["name"], memory["ai_name"], memory["style"]
+                        )
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=msgs
+                        ))
+                        continue
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[msg]
+                    ))
+                except Exception as e:
+                    api.reply_message(ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[V3TextMessage(text=f"⚠️ 圖片處理失敗：{e}")]
+                    ))
                 continue
 
     return "OK", 200
