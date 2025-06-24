@@ -6,7 +6,7 @@ import tempfile
 from openai import OpenAI, OpenAIError
 from linebot.v3.messaging import AudioMessage as V3AudioMessage, TextMessage as V3TextMessage
 
-from app import user_data  # ⭐ 新增：載入使用者語音偏好
+# ⭐ 不要 import app，不要 import user_data
 
 # 初始化 OpenAI 客戶端
 client = OpenAI()
@@ -18,16 +18,12 @@ def upload_to_temp_url(filepath: str) -> str:
     filename = os.path.basename(filepath)
     return f"https://your-cdn.com/audio/{filename}"  # ⚠️ 請改為實際 CDN 或暫存 URL
 
-def generate_tts_audio(text: str, user_id: str):
+def generate_tts_audio(text: str, voice: str = "nova"):
     """
-    將文字轉為語音，根據使用者語音偏好選擇 voice。
+    將文字轉為語音，由外部指定 voice 參數（預設 nova）。
     回傳 V3AudioMessage；失敗則回傳文字訊息。
     """
     try:
-        voice = "nova"  # 預設語音風格
-        if user_id in user_data:
-            voice = user_data[user_id].get("voice", "nova")
-
         # 1. 呼叫 OpenAI TTS
         resp = client.audio.speech.create(
             model="tts-1-hd",
@@ -36,7 +32,7 @@ def generate_tts_audio(text: str, user_id: str):
         )
 
         # 2. 寫入暫存檔
-        tmp_path = os.path.join(tempfile.gettempdir(), f"{user_id}_tts.mp3")
+        tmp_path = os.path.join(tempfile.gettempdir(), f"tts_{os.getpid()}.mp3")
         with open(tmp_path, "wb") as f:
             f.write(resp.content)
 
