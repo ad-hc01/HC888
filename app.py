@@ -157,11 +157,17 @@ def callback():
 
                 # 語音播報
                 if text.startswith("語音播報:"):
-                    from flask import url_for
-                    import os
+                    from tts_handler import generate_tts_file
+                    tts_text = text.split("語音播報:", 1)[1].strip()
+                    tts_fp = generate_tts_file(tts_text, memory.get("voice", "nova"))
 
-                    tts_text = text.split("語音播報:",1)[1].strip()
-                    tts_fp = generate_tts_audio(tts_text, memory.get("voice","nova"))
+                    if not tts_fp:
+                        api.reply_message(ReplyMessageRequest(
+                            reply_token=event.reply_token,
+                            messages=[V3TextMessage(text="⚠️ 語音產生失敗，請稍後再試。")]
+                        ))
+                        continue
+
                     try:
                         from pydub import AudioSegment
                         audio = AudioSegment.from_file(tts_fp)
